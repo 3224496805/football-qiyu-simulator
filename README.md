@@ -1,5 +1,7 @@
 # 足球奇域模拟器（Football Qiyu Simulator）
 
+**在线直达：https://3224496805.github.io/football-qiyu-simulator/**
+
 基于原神「千星奇域」奇域项目的**事件优先级排序**工具：用状态逻辑图描述球权 / 位置 / 控制 / 血量四个逻辑域，通过图粘合（glue）、复合（compose）、超边（hyperedge）构造总状态逻辑超图，并基于 BFS 事件搜索树计算事件优先级、给出参数平衡建议。
 
 ## 优先级语义
@@ -34,6 +36,11 @@ npm run build
 ```
 
 技术栈：React + TypeScript + Vite + Tailwind CSS。
+
+## 部署
+
+静态站点发布在 `gh-pages` 分支（仅含 dist 产物），GitHub Pages 从该分支部署。
+更新站点：修改源码后 `npm run build`，再把 `dist/` 内容推送到 `gh-pages` 分支即可。
 
 ## 背景
 
