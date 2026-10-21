@@ -1,0 +1,163 @@
+// 动态模拟引擎（二期）：100ms tick 事件队列 + 同刻冲突按权威优先级裁决 + 短环滞留检测
+//
+// 模型：
+//   每个实体在每张逻辑图上各有一个当前状态；每 tick 每条出边以小概率被「世界」触发
+//   （概率 = 活跃度 × structWeight × 0.1，冷却期内不可触发；职业限定边只对该职业实体开放）。
+//   同一实体同一张图在同一 tick 触发多条边 = 同刻冲突，只执行权威排名最高的一条，其余计入抑制数。
+import type { PriorityResult } from './priority';
+import type { Scenario } from '@/types/model';
+
+export interface EntityState {
+  kind: 'player' | 'ball';
+  name: string;
+  professionId?: string;
+  states: Record<string, string>; // graphId -> 状态名
+}
+
+export interface SimEvent {
+  tick: number;
+  entity: string;
+  graphId: string;
+  event: string;
+  from: string;
+  to: string;
+  outcome: 'executed' | 'suppressed' | 'cooldown';
+  reason?: string;
+}
+
+export interface SimStats {
+  tick: number;
+  fired: Record<string, number>;        // event -> 执行次数
+  suppressed: Record<string, number>; // event -> 同刻冲突被抑制次数
+  cycleTrap: Record<string, number>;    // entity -> 连续处于短环内的 tick 数
+  log: SimEvent[];
+  contradiction: string[];              // 矛盾/死锁检测
+}
+
+export interface SimState {
+  entities: EntityState[];
+  stats: SimStats;
+}
+
+// 初始状态：按默认阵型摆位
+export function initSim(sc: Scenario): SimState {
+  const entities: EntityState[] = sc.players.map((p) => {
+    const teamMates = sc.players.filter((x) => x.team === p.team);
+    const idx = teamMates.indexOf(p);
+    const n = teamMates.length;
+    return {
+      kind: 'player',
+      name: p.name,
+      professionId: p.professionId,
+      states: {
+        possession: '无球',
+        position: `(${p.team === 'A' ? 2 : 7},${Math.round(((idx + 0.5) / n) * 9)})`,
+        control: '自由',
+        hp: '健康',
+      },
+    };
+  });
+  entities.push({ kind: 'ball', name: '球', states: { ballTrack: '自由' } });
+  return {
+    entities,
+    stats: { tick: 0, fired: {}, suppressed: {}, cycleTrap: {}, log: [], contradiction: [] },
+  };
+}
+
+// 推进一个 tick；priorityByEdgeId 提供权威名次（名次越小越优先）
+export function stepSim(
+  sc: Scenario,
+  result: PriorityResult,
+  state: SimState,
+  activity = 1,
+  tau = 4,
+): SimState {
+  const tick = state.stats.tick + 1;
+  const fired = { ...state.stats.fired };
+  const suppressed = { ...state.stats.suppressed };
+  const cycleTrap = { ...state.stats.cycleTrap };
+  const log: SimEvent[] = [];
+  const contradiction: string[] = [];
+
+  const rankOf = new Map<string, number>();
+  for (const s of result.scores) rankOf.set(s.edge.id, s.rank);
+
+  // 冷却表：edgeId -> 剩余 tick（跨实体独立冷却）
+  const cds = (state as unknown as { __cds?: Record<string, number> }).__cds ?? {};
+
+  const entities = state.entities.map((ent) => {
+    const states = { ...ent.states };
+    for (const [gid, g] of Object.entries(sc.graphs)) {
+      if (g.owner !== ent.kind) continue;
+      const curName = states[gid];
+      const cur = g.nodes.find((n) => n.name === curName);
+      if (!cur) { contradiction.push(`${ent.name} 在「${g.name}」中处于未知状态「${curName}」`); continue; }
+      // 候选出边：职业限定过滤 + 冷却过滤（冷却内的边不计入竞争，只记日志）
+      const out = g.edges.filter((e) => e.from === cur.id);
+      if (out.length === 0) {
+        // 死锁检测：无出边的非终止状态
+        contradiction.push(`${ent.name}「${g.name}·${curName}」无可用事件（死锁）`);
+        continue;
+      }
+      const eligible = out.filter((e) => {
+        if (e.professionIds && ent.professionId && !e.professionIds.includes(ent.professionId)) return false;
+        return (cds[e.id] ?? 0) <= 0;
+      });
+      for (const e of out) {
+        if ((cds[e.id] ?? 0) > 0) cds[e.id] = cds[e.id] - 1;
+      }
+      // 每边独立小概率触发
+      const triggered = eligible.filter(() => Math.random() < Math.min(0.9, activity * 0.12));
+      if (triggered.length === 0) continue;
+      // 同刻冲突：按权威排名裁决
+      triggered.sort((a, b) => (rankOf.get(a.id) ?? 9999) - (rankOf.get(b.id) ?? 9999));
+      const win = triggered[0];
+      const toNode = g.nodes.find((n) => n.id === win.to);
+      if (!toNode) continue;
+      states[gid] = toNode.name;
+      if (win.params.cooldown > 0) cds[win.id] = win.params.cooldown;
+      fired[win.event] = (fired[win.event] ?? 0) + 1;
+      log.push({ tick, entity: ent.name, graphId: gid, event: win.event, from: curName, to: toNode.name, outcome: 'executed' });
+      for (const lose of triggered.slice(1)) {
+        suppressed[lose.event] = (suppressed[lose.event] ?? 0) + 1;
+        log.push({ tick, entity: ent.name, graphId: gid, event: lose.event, from: curName, to: g.nodes.find((n) => n.id === lose.to)?.name ?? '?', outcome: 'suppressed', reason: `同刻冲突输给「${win.event}」（权威名次 #${rankOf.get(win.id)}）` });
+      }
+    }
+    return { ...ent, states };
+  });
+
+  // 短环滞留检测：实体在任一图内连续 K tick 于少于 tau 个状态间打转
+  const prevStates = (state as unknown as { __hist?: Record<string, string[]> }).__hist ?? {};
+  const hist: Record<string, string[]> = {};
+  for (const ent of entities) {
+    for (const [gid, nm] of Object.entries(ent.states)) {
+      const key = `${ent.name}@${gid}`;
+      const h = [...(prevStates[key] ?? []), nm].slice(-(tau + 1));
+      hist[key] = h;
+      const uniq = new Set(h);
+      if (h.length >= tau && uniq.size < tau) {
+        cycleTrap[ent.name] = (cycleTrap[ent.name] ?? 0) + 1;
+        if (cycleTrap[ent.name] === 50) {
+          contradiction.push(`${ent.name} 在「${sc.graphs[gid]?.name}」短状态集 {${[...uniq].join('、')}} 内滞留 50+ tick（短死循环嫌疑）`);
+        }
+      } else {
+        cycleTrap[ent.name] = 0;
+      }
+    }
+  }
+
+  const next: SimState = {
+    entities,
+    stats: {
+      tick,
+      fired,
+      suppressed,
+      cycleTrap,
+      log: [...state.stats.log, ...log].slice(-300),
+      contradiction: [...state.stats.contradiction, ...contradiction].slice(-100),
+    },
+  };
+  (next as unknown as { __cds?: Record<string, number> }).__cds = cds;
+  (next as unknown as { __hist?: Record<string, string[]> }).__hist = hist;
+  return next;
+}
