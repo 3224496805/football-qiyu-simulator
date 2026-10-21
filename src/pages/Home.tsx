@@ -8,6 +8,7 @@ import TotalGraphPanel from '@/components/TotalGraphPanel';
 import SearchTreePanel from '@/components/SearchTreePanel';
 import CompositePanel from '@/components/CompositePanel';
 import ProfessionPanel from '@/components/ProfessionPanel';
+import PitchPanel from '@/components/PitchPanel';
 import { buildRoster, createDefaultScenario, emptyGraph } from '@/lib/defaultScenario';
 import { computePriorities, suggest } from '@/lib/priority';
 import { deleteScenario, exportScenario, importScenario, listScenarios, loadScenario, newId, saveScenario } from '@/lib/storage';
@@ -22,7 +23,7 @@ function graphColor(id: string, graphs: Scenario['graphs']): string {
   return GRAPH_COLORS[i % GRAPH_COLORS.length];
 }
 
-const TABS = ['图编辑', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '技能模板'] as const;
+const TABS = ['图编辑', '位置联合状态', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '技能模板'] as const;
 
 export default function Home() {
   const [metas, setMetas] = useState(listScenarios);
@@ -218,6 +219,7 @@ export default function Home() {
             </div>
           </div>
         )}
+        {tab === '位置联合状态' && <PitchPanel scenario={scenario} onChange={setScenario} />}
         {tab === '复合预览' && <CompositePanel scenario={scenario} />}
         {tab === '总超图' && <TotalGraphPanel scenario={scenario} result={result} />}
         {tab === 'DFS 搜索树' && <SearchTreePanel scenario={scenario} result={result} alpha={alpha} />}

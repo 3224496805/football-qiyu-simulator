@@ -79,6 +79,8 @@ export interface BalanceParams {
   displacement: number;     // 位移基准距离（米）
 }
 
+export interface FormationSpot { id: string; col: number; row: number } // id=球员id 或 'ball'
+
 export interface Scenario {
   id: string;
   version: number;          // 结构版本，用于存量数据迁移（当前 4）
@@ -87,6 +89,7 @@ export interface Scenario {
   professions: Profession[];
   players: PlayerSpec[];    // 全体球员名册（两队），长度 = playersPerTeam × 2
   graphs: Record<DomainId, DomainGraph>; // 实体上的状态逻辑图（可自由增删）
+  formation?: FormationSpot[]; // 多人位置联合状态的当前落点（球场视图，可选）
   skills: SkillTemplate[];
   balance: BalanceParams;
   createdAt: number;
