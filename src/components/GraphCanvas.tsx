@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DomainGraph } from '@/types/model';
 
 interface Props {
@@ -11,15 +11,27 @@ interface Props {
 const NODE_R = 26;
 
 export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Props) {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 920, h: 560 });
   const [dragId, setDragId] = useState<string | null>(null);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [linkMode, setLinkMode] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
 
+  // 实测容器尺寸，让 SVG 用户坐标与屏幕像素 1:1 对应（避免不同窗口/缩放下图元漂移或放大）
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setSize({ w: Math.max(600, el.clientWidth), h: Math.max(400, el.clientHeight) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const toLocal = useCallback((e: React.MouseEvent) => {
-    const rect = svgRef.current!.getBoundingClientRect();
+    const rect = wrapRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }, []);
 
@@ -80,6 +92,27 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
     });
   };
 
+  // ---------- 视图复位：把全部节点收纳进当前视野 ----------
+  const resetView = () => {
+    if (graph.nodes.length === 0) return;
+    const xs = graph.nodes.map((n) => n.x), ys = graph.nodes.map((n) => n.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+    const pad = 90;
+    const availW = Math.max(200, size.w - pad * 2), availH = Math.max(200, size.h - pad * 2);
+    const k = Math.min(availW / spanX, availH / spanY, 1.5); // 放大不超过 1.5 倍
+    const offX = (size.w - spanX * k) / 2, offY = (size.h - spanY * k) / 2;
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) => ({
+        ...n,
+        x: offX + (n.x - minX) * k,
+        y: offY + (n.y - minY) * k,
+      })),
+    });
+  };
+
   // ---------- 删除 ----------
   const deleteSelected = () => {
     if (selectedNode) {
@@ -126,7 +159,7 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
   };
 
   return (
-    <div className="relative w-full h-full">
+    <div ref={wrapRef} className="relative w-full h-full overflow-hidden">
       <div className="absolute top-2 left-2 z-10 flex gap-2">
         <button
           onClick={() => { setLinkMode(!linkMode); setLinkFrom(null); }}
@@ -137,11 +170,16 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
         <button onClick={deleteSelected} className="px-3 py-1 rounded text-sm border bg-background/80 hover:bg-destructive hover:text-white">
           删除选中
         </button>
-        <span className="px-3 py-1 text-xs text-muted-foreground">双击空白 = 新建状态 · 点击边 = 编辑事件</span>
+        <button onClick={resetView} className="px-3 py-1 rounded text-sm border bg-background/80 hover:bg-muted">
+          视图复位
+        </button>
+        <span className="px-3 py-1 text-xs text-muted-foreground">双击空白 = 新建状态 · 点击边 = 编辑事件 · 拖拽 = 移动</span>
       </div>
       <svg
-        ref={svgRef}
-        className="w-full h-full bg-slate-50 dark:bg-slate-900 rounded-lg"
+        width={size.w}
+        height={size.h}
+        viewBox={`0 0 ${size.w} ${size.h}`}
+        className="bg-slate-50 dark:bg-slate-900 rounded-lg"
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
         onDoubleClick={onDoubleClick}
