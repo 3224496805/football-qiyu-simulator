@@ -5,20 +5,24 @@ import PriorityPanel from '@/components/PriorityPanel';
 import SuggestPanel from '@/components/SuggestPanel';
 import SkillPanel from '@/components/SkillPanel';
 import TotalGraphPanel from '@/components/TotalGraphPanel';
-import { createDefaultScenario } from '@/lib/defaultScenario';
+import SearchTreePanel from '@/components/SearchTreePanel';
+import CompositePanel from '@/components/CompositePanel';
+import ProfessionPanel from '@/components/ProfessionPanel';
+import { buildRoster, createDefaultScenario } from '@/lib/defaultScenario';
 import { computePriorities, suggest } from '@/lib/priority';
 import { deleteScenario, exportScenario, importScenario, listScenarios, loadScenario, newId, saveScenario } from '@/lib/storage';
 import type { DomainEdge, DomainGraph, DomainId, Scenario } from '@/types/model';
-import { DOMAIN_IDS, DOMAIN_NAMES } from '@/types/model';
+import { DOMAIN_IDS, DOMAIN_NAMES, DOMAIN_OWNER, ENTITY_NAMES } from '@/types/model';
 
 const DOMAIN_COLORS: Record<DomainId, string> = {
-  ball: '#16a34a',
+  possession: '#16a34a',
   position: '#2563eb',
   control: '#9333ea',
   hp: '#dc2626',
+  ballTrack: '#ea580c',
 };
 
-const TABS = ['图编辑', '总超图', '优先级计算', '参数建议', '技能模板'] as const;
+const TABS = ['图编辑', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '技能模板'] as const;
 
 export default function Home() {
   const [metas, setMetas] = useState(listScenarios);
@@ -27,7 +31,7 @@ export default function Home() {
     return m.length > 0 ? loadScenario(m[0].id) : null;
   });
   const [tab, setTab] = useState<(typeof TABS)[number]>('图编辑');
-  const [domain, setDomain] = useState<DomainId>('ball');
+  const [domain, setDomain] = useState<DomainId>('possession');
   const [alpha, setAlpha] = useState(0.5);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
   const saveTimer = useRef<number | null>(null);
@@ -125,7 +129,10 @@ export default function Home() {
         <div className="flex items-center gap-1 text-sm">
           <span>每队</span>
           <input type="number" min={1} max={4} className="border rounded px-1 w-14 bg-background" value={scenario.playersPerTeam}
-            onChange={(e) => setScenario({ ...scenario, playersPerTeam: Math.max(1, Math.min(4, +e.target.value)) })} />
+            onChange={(e) => {
+              const n = Math.max(1, Math.min(4, +e.target.value));
+              setScenario({ ...scenario, playersPerTeam: n, players: buildRoster(n, scenario.professions) });
+            }} />
           <span>人（总数上限 8）</span>
         </div>
         <div className="flex gap-1 ml-auto flex-wrap">
@@ -152,17 +159,22 @@ export default function Home() {
       <main className="flex-1 overflow-hidden">
         {tab === '图编辑' && (
           <div className="h-full flex flex-col">
-            <div className="flex gap-1 px-4 py-2 border-b flex-wrap">
-              {DOMAIN_IDS.map((d) => (
-                <button key={d} onClick={() => setDomain(d)}
-                  className={`px-3 py-1 rounded text-sm border ${domain === d ? 'text-white' : 'bg-background'}`}
-                  style={domain === d ? { background: DOMAIN_COLORS[d] } : { borderColor: DOMAIN_COLORS[d], color: DOMAIN_COLORS[d] }}>
-                  {DOMAIN_NAMES[d]}
-                </button>
+            <div className="px-4 py-2 border-b space-y-1">
+              {(['player', 'ball'] as const).map((kind) => (
+                <div key={kind} className="flex gap-1 flex-wrap items-center">
+                  <span className="text-xs font-bold text-muted-foreground w-16">{ENTITY_NAMES[kind]}</span>
+                  {DOMAIN_IDS.filter((d) => DOMAIN_OWNER[d] === kind).map((d) => (
+                    <button key={d} onClick={() => setDomain(d)}
+                      className={`px-3 py-1 rounded text-sm border ${domain === d ? 'text-white' : 'bg-background'}`}
+                      style={domain === d ? { background: DOMAIN_COLORS[d] } : { borderColor: DOMAIN_COLORS[d], color: DOMAIN_COLORS[d] }}>
+                      {DOMAIN_NAMES[d]}
+                    </button>
+                  ))}
+                </div>
               ))}
-              <span className="text-xs text-muted-foreground self-center ml-2">
-                状态节点公用、挂在各实体上；跨逻辑域同名状态将在总超图中自动粘合
-              </span>
+              <div className="text-xs text-muted-foreground">
+                状态节点按实体类型公用：{scenario.players.length} 个角色共享角色逻辑图（技能边按职业区分），1 个球独立拥有球路逻辑；跨逻辑域同名状态在总超图中自动粘合。
+              </div>
             </div>
             <div className="flex-1 overflow-auto">
               <div className="p-2 h-full min-w-[920px] min-h-[560px]">
@@ -171,11 +183,16 @@ export default function Home() {
             </div>
           </div>
         )}
+        {tab === '复合预览' && <CompositePanel scenario={scenario} />}
         {tab === '总超图' && <TotalGraphPanel scenario={scenario} result={result} />}
-        {tab === '优先级计算' && <PriorityPanel result={result} alpha={alpha} onAlpha={setAlpha} />}
+        {tab === 'DFS 搜索树' && <SearchTreePanel result={result} />}
+        {tab === '优先级计算' && <PriorityPanel result={result} scenario={scenario} alpha={alpha} onAlpha={setAlpha} />}
         {tab === '参数建议' && (
           <SuggestPanel scenario={scenario} result={result} suggestions={suggestions}
             onBalance={(balance) => setScenario({ ...scenario, balance })} />
+        )}
+        {tab === '职业名册' && (
+          <ProfessionPanel scenario={scenario} onChange={setScenario} />
         )}
         {tab === '技能模板' && (
           <SkillPanel scenario={scenario} onChange={(skills) => setScenario({ ...scenario, skills })} />
@@ -183,7 +200,9 @@ export default function Home() {
       </main>
 
       <EdgeDialog edge={editingEdge} fromName={editingFrom} toName={editingTo}
-        skills={scenario.skills} onSave={updateEdge} onClose={() => setEditingEdgeId(null)} />
+        skills={scenario.skills} professions={scenario.professions}
+        showProfessions={DOMAIN_OWNER[domain] === 'player'}
+        onSave={updateEdge} onClose={() => setEditingEdgeId(null)} />
     </div>
   );
 }

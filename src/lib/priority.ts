@@ -1,4 +1,11 @@
-// 核心算法：总超图构建（粘合/复合）+ BFS + 主循环识别 + 优先级评分
+// 核心算法：总超图构建（粘合/复合）+ DFS 有向搜索树 + 主循环识别 + 优先级评分
+//
+// 优先级语义（用户定稿）：
+//   DFS 从起点（无球）生成有向搜索树；一个事件在搜索树的不同分支上可以处于不同层深。
+//   目标 = 尽量避免状态陷入短死循环、让全局状态处于大的主循环中。
+//   因此不是"层深大就优先"，而是"在通往深层/主循环路上的事件"优先：
+//     路径分 = 距主循环越近越高（0.6 权重） + 子树能到达的层深越深越高（0.4 权重）
+//   短环（<tau）内事件 ×0.3 惩罚；再叠加 α·手动分；同分按默认序（传>掉>射>蓄力更新>拿>激活>关闭）。
 import type { DomainEdge, DomainId, Scenario } from '@/types/model';
 import { defaultOrderIndex, DOMAIN_NAMES } from '@/types/model';
 
@@ -6,7 +13,7 @@ export interface MergedNode {
   id: string;          // 粘合后的节点 id（同名状态合并）
   name: string;        // 状态名
   domains: DomainId[]; // 来源逻辑域
-  layers?: number[];   // BFS 出现的层（可能有多个）
+  depths?: number[];   // DFS 首次访问层深（可能有多个来源域）
 }
 
 export interface TotalEdge extends DomainEdge {
@@ -50,44 +57,80 @@ export function buildTotalGraph(sc: Scenario): TotalGraph {
   return { nodes: [...byName.values()], edges, gluedPairs };
 }
 
-// ---------- 2. BFS（起点 = 无球） ----------
-export interface BfsResult {
-  layerOf: Map<string, number>;       // 节点最早层
-  layersOfEdge: Map<string, number[]>; // 事件出现的层数集合（同一事件可在多分支/多层）
-  unreachable: string[];              // 从无球不可达的状态
+// ---------- 2. DFS 有向搜索树（起点 = 无球） ----------
+export interface DfsResult {
+  rootId: string;                        // 起点节点 id
+  depthOf: Map<string, number>;          // 节点首次访问的 DFS 树层深
+  parentOf: Map<string, string>;         // DFS 树父节点 id
+  treeEdgeOf: Map<string, string>;       // 节点 -> 到达它的树边 id
+  depthsOfEdge: Map<string, number[]>;   // 事件名 -> 出现过的层深集合（同一事件可多层）
+  treeEdgeIds: Set<string>;              // 树边
+  backEdgeIds: Set<string>;              // 回边（指向栈上祖先 = 成环证据）
+  maxDepth: number;                      // 树的最大层深
+  unreachable: string[];                 // 从起点不可达的状态
+  visitOrder: string[];                  // 节点首次访问顺序
 }
 
-export function bfsFromFree(total: TotalGraph, startName = '无球'): BfsResult {
+export function dfsFromFree(total: TotalGraph, startName = '无球'): DfsResult {
   const start = total.nodes.find((n) => n.name === startName) ?? total.nodes[0];
-  const layerOf = new Map<string, number>();
-  const layersOfEdge = new Map<string, number[]>();
-  const visited = new Set<string>();
-  const queue: string[] = [start.id];
-  layerOf.set(start.id, 0);
-  visited.add(start.id);
+  const depthOf = new Map<string, number>();
+  const parentOf = new Map<string, string>();
+  const treeEdgeOf = new Map<string, string>();
+  const depthsOfEdge = new Map<string, number[]>();
+  const treeEdgeIds = new Set<string>();
+  const backEdgeIds = new Set<string>();
+  const visitOrder: string[] = [];
 
-  // 事件名归并：同名事件跨分支/多层出现
-  const pushEdge = (event: string, layer: number) => {
-    const arr = layersOfEdge.get(event) ?? [];
-    if (!arr.includes(layer)) arr.push(layer);
-    layersOfEdge.set(event, arr);
+  const pushDepth = (event: string, d: number) => {
+    const arr = depthsOfEdge.get(event) ?? [];
+    if (!arr.includes(d)) arr.push(d);
+    depthsOfEdge.set(event, arr);
   };
 
-  while (queue.length) {
-    const cur = queue.shift()!;
-    const layer = layerOf.get(cur)!;
-    for (const e of total.edges) {
-      if (e.from !== cur) continue;
-      pushEdge(e.event, layer + 1);
-      if (!visited.has(e.to)) {
-        visited.add(e.to);
-        layerOf.set(e.to, layer + 1);
-        queue.push(e.to);
-      }
-    }
+  // 邻接表（按事件名排序，保证 DFS 顺序确定、可复现）
+  const adj = new Map<string, TotalEdge[]>();
+  for (const n of total.nodes) adj.set(n.id, []);
+  for (const e of total.edges) adj.get(e.from)!.push(e);
+  for (const list of adj.values()) {
+    list.sort((a, b) => a.event.localeCompare(b.event, 'zh') || a.toName.localeCompare(b.toName, 'zh'));
   }
-  const unreachable = total.nodes.filter((n) => !visited.has(n.id)).map((n) => n.name);
-  return { layerOf, layersOfEdge, unreachable };
+
+  // 显式栈迭代 DFS（栈上集合用于识别回边）
+  interface Frame { node: string; depth: number; iter: number }
+  const onStack = new Set<string>();
+  const stack: Frame[] = [{ node: start.id, depth: 0, iter: 0 }];
+  depthOf.set(start.id, 0);
+  onStack.add(start.id);
+  visitOrder.push(start.id);
+
+  while (stack.length) {
+    const frame = stack[stack.length - 1];
+    const list = adj.get(frame.node)!;
+    if (frame.iter >= list.length) {
+      onStack.delete(frame.node);
+      stack.pop();
+      continue;
+    }
+    const e = list[frame.iter++];
+    pushDepth(e.event, frame.depth + 1);
+    if (!depthOf.has(e.to)) {
+      // 树边：首次访问
+      depthOf.set(e.to, frame.depth + 1);
+      parentOf.set(e.to, frame.node);
+      treeEdgeOf.set(e.to, e.id);
+      treeEdgeIds.add(e.id);
+      visitOrder.push(e.to);
+      onStack.add(e.to);
+      stack.push({ node: e.to, depth: frame.depth + 1, iter: 0 });
+    } else if (onStack.has(e.to)) {
+      backEdgeIds.add(e.id); // 回边 → 环
+    }
+    // 其余为前向边/横边（指向已访问且不在栈上的节点），不参与树结构
+  }
+
+  const maxDepth = Math.max(0, ...[...depthOf.values()]);
+  const unreachable = total.nodes.filter((n) => !depthOf.has(n.id)).map((n) => n.name);
+  return { rootId: start.id, depthOf, parentOf, treeEdgeOf, depthsOfEdge, treeEdgeIds, backEdgeIds, maxDepth, unreachable, visitOrder };
 }
 
 // ---------- 3. 主循环识别（Tarjan SCC） ----------
@@ -98,7 +141,7 @@ export interface CycleInfo {
   sccs: string[][];           // 所有 SCC（节点名）
 }
 
-export function findCycles(total: TotalGraph, tau = 4): CycleInfo {
+export function findCycles(total: TotalGraph, tau = 4, depthOf?: Map<string, number>): CycleInfo {
   const index = new Map<string, number>();
   const low = new Map<string, number>();
   const onStack = new Set<string>();
@@ -139,19 +182,24 @@ export function findCycles(total: TotalGraph, tau = 4): CycleInfo {
   for (const n of total.nodes) if (!index.has(n.id)) strongconnect(n.id);
 
   const named = sccs.map((s) => s.map((id) => total.nodes.find((n) => n.id === id)?.name ?? id));
-  // 主循环 = 节点数最多的 SCC（平局取含 BFS 最深层节点的）
-  const sizeRank = [...named.keys()].sort((a, b) => named[b].length - named[a].length);
-  const mainIdx = sizeRank[0] ?? -1;
+  // 主循环 = 节点数最多的 SCC（平局取 DFS 层深更深的）
+  const depthRank = [...named.keys()].sort((a, b) => {
+    if (named[b].length !== named[a].length) return named[b].length - named[a].length;
+    const maxD = (idx: number) => Math.max(0, ...sccs[idx].map((id) => depthOf?.get(id) ?? 0));
+    return maxD(b) - maxD(a);
+  });
+  const mainIdx = depthRank[0] ?? -1;
   const shortCycles = named.filter((s) => s.length >= 2 && s.length < tau);
   for (let i = 0; i < sccs.length; i++) for (const id of sccs[i]) sccOf.set(id, i);
   return { mainCycle: mainIdx >= 0 ? named[mainIdx] : [], shortCycles, sccOf, sccs: named };
 }
 
-// ---------- 4. 优先级评分（修正语义：通往主循环路上的事件高分，短环惩罚） ----------
+// ---------- 4. 优先级评分（通往深层/主循环路上的事件高分，短环惩罚） ----------
 export interface EdgeScore {
   edge: TotalEdge;
-  layers: number[];      // BFS 层数集合
-  pathScore: number;     // 通往主循环路径分 0~1
+  depths: number[];      // DFS 搜索树中出现过的层深集合
+  depthScore: number;    // 子树可达层深得分 0~1（越深越高）
+  pathScore: number;     // 路径分 0~1（距主循环 + 子树深度合成）
   cyclePenalty: number;  // 短环惩罚
   structWeight: number;
   manualScore: number;   // 手动优先级归一分
@@ -159,14 +207,16 @@ export interface EdgeScore {
   rank: number;          // 全局名次（跨逻辑域合并排序）
   inMainCycle: boolean;
   inShortCycle: boolean;
+  isBackEdge: boolean;   // 回边（成环边）
 }
 
 export interface DomainResult {
   domain: DomainId;
   scores: EdgeScore[];   // 域内排序
-  bfs: BfsResult;
+  dfs: DfsResult;
   cycles: CycleInfo;
-  diameter: number;
+  diameter: number;      // 距主循环的最远半径
+  subtreeDepthOf: Map<string, number>; // 节点 DFS 子树可达最大层深
 }
 
 export interface PriorityResult {
@@ -175,10 +225,10 @@ export interface PriorityResult {
   alpha: number;
 }
 
-// 单图分析（BFS → 主循环 → 评分）
+// 单图分析（DFS 搜索树 → 主循环 → 评分）
 function analyzeGraph(total: TotalGraph, alpha: number, tau: number, domain: DomainId): DomainResult {
-  const bfs = bfsFromFree(total);
-  const cycles = findCycles(total, tau);
+  const dfs = dfsFromFree(total);
+  const cycles = findCycles(total, tau, dfs.depthOf);
 
   // dist(node, 主循环)：反向 BFS
   const dist = new Map<string, number>();
@@ -199,23 +249,38 @@ function analyzeGraph(total: TotalGraph, alpha: number, tau: number, domain: Dom
   }
   const diameter = Math.max(1, ...[...dist.values()]);
 
+  // 子树可达最大层深：按 DFS 访问逆序递推
+  const subtreeDepthOf = new Map<string, number>();
+  for (const id of dfs.visitOrder) subtreeDepthOf.set(id, dfs.depthOf.get(id)!);
+  for (let i = dfs.visitOrder.length - 1; i >= 0; i--) {
+    const id = dfs.visitOrder[i];
+    const parent = dfs.parentOf.get(id);
+    if (parent !== undefined) {
+      subtreeDepthOf.set(parent, Math.max(subtreeDepthOf.get(parent)!, subtreeDepthOf.get(id)!));
+    }
+  }
+
   const shortSccIds = new Set<number>();
   for (let i = 0; i < cycles.sccs.length; i++) {
     if (cycles.sccs[i].length >= 2 && cycles.sccs[i].length < tau) shortSccIds.add(i);
   }
 
   const scores: EdgeScore[] = total.edges.map((edge) => {
-    const layers = bfs.layersOfEdge.get(edge.event) ?? [];
+    const depths = dfs.depthsOfEdge.get(edge.event) ?? [];
     const d = Math.min(dist.get(edge.from) ?? diameter, dist.get(edge.to) ?? diameter);
     const inMain = mainIds.has(edge.from) && mainIds.has(edge.to);
     const inShort = shortSccIds.has(cycles.sccOf.get(edge.from) ?? -1) &&
       (cycles.sccOf.get(edge.from) === cycles.sccOf.get(edge.to));
-    const pathScore = inMain ? 1 : Math.max(0, 1 - d / diameter);
+    const subDepth = subtreeDepthOf.get(edge.from) ?? dfs.depthOf.get(edge.from) ?? 0;
+    const depthScore = dfs.maxDepth > 0 ? +(subDepth / dfs.maxDepth).toFixed(3) : 0;
+    // 路径分：距主循环越近越高（0.6） + 子树可达层深越深越高（0.4）；主循环内 = 1
+    const pathScore = inMain ? 1 : +Math.max(0, Math.min(1, 0.6 * (1 - d / diameter) + 0.4 * depthScore)).toFixed(3);
     const cyclePenalty = inShort ? 0.3 : 1;
     const structWeight = edge.params.structWeight;
     const manualScore = edge.params.basePriority / 10;
     const finalScore = +(pathScore * cyclePenalty * structWeight + alpha * manualScore).toFixed(4);
-    return { edge, layers, pathScore: +pathScore.toFixed(3), cyclePenalty, structWeight, manualScore: +manualScore.toFixed(3), finalScore, rank: 0, inMainCycle: inMain, inShortCycle: inShort };
+    const isBackEdge = dfs.backEdgeIds.has(edge.id);
+    return { edge, depths, depthScore, pathScore, cyclePenalty, structWeight, manualScore: +manualScore.toFixed(3), finalScore, rank: 0, inMainCycle: inMain, inShortCycle: inShort, isBackEdge };
   });
 
   scores.sort((a, b) =>
@@ -224,10 +289,10 @@ function analyzeGraph(total: TotalGraph, alpha: number, tau: number, domain: Dom
     defaultOrderIndex(a.edge.event) - defaultOrderIndex(b.edge.event) ||
     a.edge.event.localeCompare(b.edge.event, 'zh'));
 
-  return { domain, scores, bfs, cycles, diameter };
+  return { domain, scores, dfs, cycles, diameter, subtreeDepthOf };
 }
 
-// 域图 → TotalGraph 结构（复合 = 各逻辑域独立叠加，分别 BFS）
+// 域图 → TotalGraph 结构（复合 = 各逻辑域独立叠加，分别 DFS）
 function buildDomainTotal(g: Scenario['graphs'][DomainId]): TotalGraph {
   const nodes: MergedNode[] = g.nodes.map((n) => ({ id: `n_${n.name}`, name: n.name, domains: [g.domain] }));
   const edges: TotalEdge[] = g.edges
@@ -244,7 +309,7 @@ function buildDomainTotal(g: Scenario['graphs'][DomainId]): TotalGraph {
 }
 
 export function computePriorities(sc: Scenario, alpha = 0.5, tau = 4): PriorityResult {
-  // 复合语义：球/位置/控制/血量各逻辑域互不影响，每域独立 BFS（起点=无球，无无球则从首节点）
+  // 复合语义：球/位置/控制/血量各逻辑域互不影响，每域独立 DFS（起点=无球，无无球则从首节点）
   const byDomain = {} as Record<DomainId, DomainResult>;
   for (const domain of Object.keys(sc.graphs) as DomainId[]) {
     byDomain[domain] = analyzeGraph(buildDomainTotal(sc.graphs[domain]), alpha, tau, domain);
@@ -272,6 +337,8 @@ export interface Suggestion {
 
 export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
   const out: Suggestion[] = [];
+  const byEvent = new Map<string, EdgeScore>();
+  for (const s of result.scores) if (!byEvent.has(s.edge.event)) byEvent.set(s.edge.event, s);
 
   // 短环破除：对短环内事件提高冷却/降低结构权重
   for (const d of Object.values(result.byDomain)) {
@@ -329,4 +396,32 @@ export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
   // 去重（target+kind）
   const seen = new Set<string>();
   return out.filter((s) => { const k = s.target + s.kind; if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// ---------- 6. 复合（compose：图替换式叠加，非笛卡尔积的显示） ----------
+// 语义：把替换图 B 的副本嵌入宿主图 A 的每个状态点，A 的边保持连接各副本。
+// 复合状态 = (A 状态, B 状态)，两图互不影响。
+export interface CompositePlan {
+  host: DomainId;
+  guest: DomainId;
+  hostNodeCount: number;
+  guestNodeCount: number;
+  guestEdgeCount: number;
+  compositeNodeCount: number; // |V_A| × |V_B|
+  compositeEdgeCount: number; // A 边 × |V_B| + |V_A| × B 边
+}
+
+export function compositeStats(sc: Scenario, host: DomainId, guest: DomainId): CompositePlan {
+  const A = sc.graphs[host];
+  const B = sc.graphs[guest];
+  const aN = A.nodes.length, bN = B.nodes.length, bE = B.edges.length;
+  const aE = A.edges.length;
+  return {
+    host, guest,
+    hostNodeCount: aN,
+    guestNodeCount: bN,
+    guestEdgeCount: bE,
+    compositeNodeCount: aN * bN,
+    compositeEdgeCount: aE * bN + aN * bE,
+  };
 }

@@ -1,14 +1,19 @@
 import type { PriorityResult } from '@/lib/priority';
+import type { Scenario } from '@/types/model';
 import { DOMAIN_NAMES } from '@/types/model';
 
 interface Props {
   result: PriorityResult;
+  scenario: Scenario;
   alpha: number;
   onAlpha: (a: number) => void;
 }
 
-export default function PriorityPanel({ result, alpha, onAlpha }: Props) {
+export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Props) {
   const { scores, byDomain } = result;
+  const profName = (ids?: string[]) =>
+    !ids || ids.length === 0 ? '通用'
+      : ids.map((id) => scenario.professions.find((p) => p.id === id)?.name ?? id).join('/');
 
   // 同刻冲突预览：同逻辑域内目标状态相同的事件互为冲突，仅第一名执行一次
   const conflicts = new Map<string, typeof scores>();
@@ -26,14 +31,14 @@ export default function PriorityPanel({ result, alpha, onAlpha }: Props) {
           const r = byDomain[d];
           return (
             <div key={d} className="border rounded p-3">
-              <div className="text-muted-foreground">{DOMAIN_NAMES[d]} · BFS 起点「无球」</div>
+              <div className="text-muted-foreground">{DOMAIN_NAMES[d]} · DFS 根 = {d === 'possession' ? '无球' : '首状态'}</div>
               <div className="mt-1 text-xs">
                 <span className="text-emerald-600">主循环：{r.cycles.mainCycle.length > 0 ? r.cycles.mainCycle.join('→') : '（无环）'}</span><br />
                 <span className={r.cycles.shortCycles.length > 0 ? 'text-red-600' : 'text-muted-foreground'}>
                   短环：{r.cycles.shortCycles.length > 0 ? r.cycles.shortCycles.map((c) => c.join('→')).join('；') : '无'}
                 </span><br />
-                <span className={r.bfs.unreachable.length > 0 ? 'text-amber-600' : 'text-muted-foreground'}>
-                  不可达：{r.bfs.unreachable.length > 0 ? r.bfs.unreachable.join('、') : '无'}
+                <span className={r.dfs.unreachable.length > 0 ? 'text-amber-600' : 'text-muted-foreground'}>
+                  不可达：{r.dfs.unreachable.length > 0 ? r.dfs.unreachable.join('、') : '无'}
                 </span>
               </div>
             </div>
@@ -44,7 +49,7 @@ export default function PriorityPanel({ result, alpha, onAlpha }: Props) {
       <div className="flex items-center gap-3 text-sm flex-wrap">
         <span>手动微调系数 α = {alpha}</span>
         <input type="range" min={0} max={1} step={0.1} value={alpha} onChange={(e) => onAlpha(+e.target.value)} className="w-48" />
-        <span className="text-muted-foreground">复合语义：各逻辑域独立 BFS 后合并排名（位置/控制/血量域无「无球」节点时从首状态出发）</span>
+        <span className="text-muted-foreground">复合语义：各逻辑域独立 DFS 生成有向搜索树后合并排名；优先级 = 通往深层/主循环路上的事件高分，短环 ×0.3 惩罚，再叠加 α·手动分</span>
       </div>
 
       <div className="border rounded overflow-auto max-h-[420px]">
@@ -55,7 +60,9 @@ export default function PriorityPanel({ result, alpha, onAlpha }: Props) {
               <th className="p-2 text-left">事件</th>
               <th className="p-2 text-left">转换</th>
               <th className="p-2 text-left">逻辑域</th>
-              <th className="p-2 text-left">BFS 层</th>
+              <th className="p-2 text-left">职业</th>
+              <th className="p-2 text-left">DFS 层深</th>
+              <th className="p-2 text-right">深度分</th>
               <th className="p-2 text-right">路径分</th>
               <th className="p-2 text-right">环罚</th>
               <th className="p-2 text-right">结构权重</th>
@@ -70,7 +77,9 @@ export default function PriorityPanel({ result, alpha, onAlpha }: Props) {
                 <td className="p-2 font-medium">{s.edge.event}{s.edge.isHyper ? ' ⇄' : ''}</td>
                 <td className="p-2 text-muted-foreground">{s.edge.fromName} → {s.edge.toName}</td>
                 <td className="p-2 text-muted-foreground">{DOMAIN_NAMES[s.edge.domain]}</td>
-                <td className="p-2 font-mono text-xs">{s.layers.sort((a, b) => a - b).join(', ')}</td>
+                <td className="p-2 text-xs">{profName(s.edge.professionIds)}</td>
+                <td className="p-2 font-mono text-xs">{s.depths.sort((a, b) => a - b).join(', ')}</td>
+                <td className="p-2 text-right font-mono">{s.depthScore}</td>
                 <td className="p-2 text-right font-mono">{s.pathScore}</td>
                 <td className="p-2 text-right font-mono">{s.cyclePenalty}</td>
                 <td className="p-2 text-right font-mono">{s.structWeight}</td>

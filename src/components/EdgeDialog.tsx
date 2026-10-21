@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
-import type { DomainEdge, SkillTemplate } from '@/types/model';
+import type { DomainEdge, Profession, SkillTemplate } from '@/types/model';
 
 interface Props {
   edge: DomainEdge | null;
   fromName: string;
   toName: string;
   skills: SkillTemplate[];
+  professions: Profession[];
+  showProfessions: boolean; // 仅角色实体逻辑域可限定职业
   onSave: (edge: DomainEdge) => void;
   onClose: () => void;
 }
 
-export default function EdgeDialog({ edge, fromName, toName, skills, onSave, onClose }: Props) {
+export default function EdgeDialog({ edge, fromName, toName, skills, professions, showProfessions, onSave, onClose }: Props) {
   const [form, setForm] = useState<DomainEdge | null>(edge);
 
   useEffect(() => setForm(edge), [edge]);
@@ -70,6 +72,25 @@ export default function EdgeDialog({ edge, fromName, toName, skills, onSave, onC
             影响其他实体
           </label>
         </div>
+
+        {showProfessions && professions.length > 0 && (
+          <div className="text-sm">
+            <div className="mb-1">职业限定（同职业共享该事件；都不勾 = 全职业通用）</div>
+            <div className="flex gap-3 flex-wrap">
+              {professions.map((p) => {
+                const cur = form.professionIds ?? [];
+                const on = cur.includes(p.id);
+                return (
+                  <label key={p.id} className="flex items-center gap-1">
+                    <input type="checkbox" checked={on}
+                      onChange={(e) => set('professionIds', e.target.checked ? [...cur, p.id] : cur.filter((x) => x !== p.id))} />
+                    {p.name}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <label className="block text-sm">
           挂载技能模板（未接入游戏，仅标记）

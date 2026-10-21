@@ -129,15 +129,39 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
   };
 
   // ---------- 渲染边 ----------
+  // 同一对节点（含反向）之间的多条边按「车道」错开，避免标签重叠
+  const pairKey = (a: string, b: string) => [a, b].sort().join('~');
+  const laneTotal = new Map<string, number>();
+  const laneIdx = new Map<string, number>();
+  {
+    const seen = new Map<string, number>();
+    for (const e of graph.edges) {
+      const k = pairKey(e.from, e.to);
+      laneTotal.set(k, (laneTotal.get(k) ?? 0) + 1);
+      laneIdx.set(e.id, seen.get(k) ?? 0);
+      seen.set(k, (seen.get(k) ?? 0) + 1);
+    }
+  }
+
   const renderEdge = (ed: typeof graph.edges[number]) => {
     const f = nodeById(ed.from)!, t = nodeById(ed.to)!;
-    const mx = (f.x + t.x) / 2, my = (f.y + t.y) / 2 - 30;
+    // 垂直于边的单位向量
+    const dx = t.x - f.x, dy = t.y - f.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len, py = dx / len;
+    const k = pairKey(ed.from, ed.to);
+    const n = laneTotal.get(k) ?? 1;
+    const lane = (laneIdx.get(ed.id) ?? 0) - (n - 1) / 2; // 0 / ±0.5 / ±1 ...
+    const off = lane * 64;                       // 车道垂直错开
+    const lift = n === 1 ? 30 : 0;               // 单边时标签抬到弧顶
+    const cx = (f.x + t.x) / 2 + px * off;
+    const cy = (f.y + t.y) / 2 + py * off - lift;
     const sel = selectedEdge === ed.id;
     const stroke = sel ? '#f59e0b' : color;
     return (
       <g key={ed.id} onClick={(e) => { e.stopPropagation(); setSelectedEdge(ed.id); setSelectedNode(null); onEditEdge(ed.id); }}>
         <path
-          d={`M ${f.x} ${f.y} Q ${mx} ${my} ${t.x} ${t.y}`}
+          d={`M ${f.x} ${f.y} Q ${cx} ${cy} ${t.x} ${t.y}`}
           fill="none"
           stroke={stroke}
           strokeWidth={sel ? 4 : ed.isHyper ? 3.5 : 2}
@@ -146,7 +170,9 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
           markerEnd={`url(#arrow_${ed.id})`}
           className="cursor-pointer hover:opacity-100"
         />
-        <text x={mx} y={my - 6} textAnchor="middle" fontSize={12} fill={stroke} className="pointer-events-none select-none">
+        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill={stroke}
+          stroke="#ffffff" strokeWidth={4} paintOrder="stroke" strokeLinejoin="round"
+          className="pointer-events-none select-none">
           {ed.event}{ed.isHyper ? ' ⇄' : ''}
         </text>
         <defs>
@@ -194,9 +220,9 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
               stroke={color} strokeWidth={3}
             />
             <text x={n.x} y={n.y + 4} textAnchor="middle" fontSize={13} fontWeight={600} fill="#0f172a" className="pointer-events-none select-none">
-              {n.name.length > 4 ? n.name.slice(0, 4) : n.name}
+              {n.name.length > 6 ? n.name.slice(0, 6) : n.name}
             </text>
-            {n.note && <title>{n.note}</title>}
+            <title>{n.name}{n.note ? `：${n.note}` : ''}</title>
           </g>
         ))}
       </svg>
