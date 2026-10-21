@@ -31,19 +31,24 @@ export function loadScenario(id: string): Scenario | null {
   }
 }
 
-// 存量迁移：v1/v2 → v3（实体归属 + 职业 + 网格位置图 + 球权/球路拆分）
-// v3 的逻辑域集合发生变化（ball/position 拆为 possession/position/ballTrack 等），
-// 因此旧方案的逻辑图整体用 v3 默认结构重建，保留名称/人数/平衡参数/技能模板。
+// 存量迁移：旧版本 → v4（逻辑图可自由增删 + 10×10 网格 + 权威=总超图 DFS）
+// 逻辑图结构（owner/id 字段）与网格密度发生变化，旧逻辑图整体用 v4 默认结构重建，
+// 保留方案名称/人数/平衡参数/技能模板/职业名册。
 function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
-  if ((sc.version ?? 1) >= 3) {
-    // v3 内补字段容错
-    sc.professions ??= createDefaultScenario().professions;
+  const fresh = createDefaultScenario();
+  if ((sc.version ?? 1) >= 4) {
+    // v4 内补字段容错
+    sc.professions ??= fresh.professions;
     sc.players ??= buildRoster(sc.playersPerTeam || 3, sc.professions);
+    for (const [gid, g] of Object.entries(sc.graphs)) {
+      g.id ??= gid;
+      g.owner ??= gid === 'ballTrack' ? 'ball' : 'player';
+      g.name ??= gid;
+    }
     return sc;
   }
-  const fresh = createDefaultScenario();
-  sc.version = 3;
+  sc.version = 4;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

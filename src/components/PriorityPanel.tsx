@@ -1,6 +1,5 @@
 import type { PriorityResult } from '@/lib/priority';
 import type { Scenario } from '@/types/model';
-import { DOMAIN_NAMES } from '@/types/model';
 
 interface Props {
   result: PriorityResult;
@@ -10,7 +9,8 @@ interface Props {
 }
 
 export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Props) {
-  const { scores, byDomain } = result;
+  const { scores, byDomain, dfs, cycles } = result;
+  const graphName = (id: string) => scenario.graphs[id]?.name ?? id;
   const profName = (ids?: string[]) =>
     !ids || ids.length === 0 ? '通用'
       : ids.map((id) => scenario.professions.find((p) => p.id === id)?.name ?? id).join('/');
@@ -26,20 +26,30 @@ export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Prop
 
   return (
     <div className="space-y-4 p-4">
+      <div className="border rounded p-3 bg-teal-50 dark:bg-teal-950/40 text-sm">
+        <div className="font-bold text-teal-700 dark:text-teal-300">权威 = 总状态逻辑超图 DFS（{Object.keys(byDomain).length} 张逻辑图已粘合）</div>
+        <div className="mt-1 text-xs">
+          根「无球」· 最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size} ·
+          主循环（{cycles.mainCycle.length} 节点）：{cycles.mainCycle.length > 0 ? cycles.mainCycle.slice(0, 24).join('→') + (cycles.mainCycle.length > 24 ? '…' : '') : '（无环）'} ·
+          <span className={cycles.shortCycles.length > 0 ? 'text-red-600' : ''}> 短环 {cycles.shortCycles.length} 个</span> ·
+          <span className={dfs.unreachable.length > 0 ? 'text-amber-600' : ''}> 不可达 {dfs.unreachable.length} 个</span>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
         {(Object.keys(byDomain) as Array<keyof typeof byDomain>).map((d) => {
           const r = byDomain[d];
           return (
             <div key={d} className="border rounded p-3">
-              <div className="text-muted-foreground">{DOMAIN_NAMES[d]} · DFS 根 = {d === 'possession' ? '无球' : '首状态'}</div>
+              <div className="text-muted-foreground">{r.graphName} · {r.scores.length} 事件</div>
               <div className="mt-1 text-xs">
-                <span className="text-emerald-600">主循环：{r.cycles.mainCycle.length > 0 ? r.cycles.mainCycle.join('→') : '（无环）'}</span><br />
-                <span className={r.cycles.shortCycles.length > 0 ? 'text-red-600' : 'text-muted-foreground'}>
-                  短环：{r.cycles.shortCycles.length > 0 ? r.cycles.shortCycles.map((c) => c.join('→')).join('；') : '无'}
+                <span className={r.scores.filter((x) => x.inMainCycle).length > 0 ? 'text-emerald-600' : 'text-muted-foreground'}>
+                  主循环内 {r.scores.filter((x) => x.inMainCycle).length} 条
                 </span><br />
-                <span className={r.dfs.unreachable.length > 0 ? 'text-amber-600' : 'text-muted-foreground'}>
-                  不可达：{r.dfs.unreachable.length > 0 ? r.dfs.unreachable.join('、') : '无'}
-                </span>
+                <span className={r.scores.some((x) => x.inShortCycle) ? 'text-red-600' : 'text-muted-foreground'}>
+                  短环内 {r.scores.filter((x) => x.inShortCycle).length} 条
+                </span><br />
+                <span className="text-muted-foreground">最高名次 #{r.scores[0]?.rank ?? '—'}（{r.scores[0]?.edge.event ?? '—'}）</span>
               </div>
             </div>
           );
@@ -49,7 +59,7 @@ export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Prop
       <div className="flex items-center gap-3 text-sm flex-wrap">
         <span>手动微调系数 α = {alpha}</span>
         <input type="range" min={0} max={1} step={0.1} value={alpha} onChange={(e) => onAlpha(+e.target.value)} className="w-48" />
-        <span className="text-muted-foreground">复合语义：各逻辑域独立 DFS 生成有向搜索树后合并排名；优先级 = 通往深层/主循环路上的事件高分，短环 ×0.3 惩罚，再叠加 α·手动分</span>
+        <span className="text-muted-foreground">权威排名：全部逻辑图粘合为总超图后统一 DFS，下表名次即最终裁决；优先级 = 通往深层/主循环路上的事件高分，短环 ×0.3 惩罚，再叠加 α·手动分</span>
       </div>
 
       <div className="border rounded overflow-auto max-h-[420px]">
@@ -76,7 +86,7 @@ export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Prop
                 <td className="p-2 font-mono">{s.rank}</td>
                 <td className="p-2 font-medium">{s.edge.event}{s.edge.isHyper ? ' ⇄' : ''}</td>
                 <td className="p-2 text-muted-foreground">{s.edge.fromName} → {s.edge.toName}</td>
-                <td className="p-2 text-muted-foreground">{DOMAIN_NAMES[s.edge.domain]}</td>
+                <td className="p-2 text-muted-foreground">{graphName(s.edge.domain)}</td>
                 <td className="p-2 text-xs">{profName(s.edge.professionIds)}</td>
                 <td className="p-2 font-mono text-xs">{s.depths.sort((a, b) => a - b).join(', ')}</td>
                 <td className="p-2 text-right font-mono">{s.depthScore}</td>
@@ -96,7 +106,7 @@ export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Prop
         {conflictGroups.length === 0 && <p className="text-muted-foreground">无冲突事件。</p>}
         {conflictGroups.map(([key, group]) => (
           <div key={key} className="mb-1">
-            <span className="font-medium">目标「{group[0].edge.toName}」（{DOMAIN_NAMES[group[0].edge.domain]}）：</span>
+            <span className="font-medium">目标「{group[0].edge.toName}」（{graphName(group[0].edge.domain)}）：</span>
             {group.slice(0, 3).map((s, i) => (
               <span key={s.edge.id} className={i === 0 ? 'text-emerald-600 font-bold' : 'text-muted-foreground line-through'}>
                 {i > 0 && '、'}{s.edge.event}（{s.finalScore}）

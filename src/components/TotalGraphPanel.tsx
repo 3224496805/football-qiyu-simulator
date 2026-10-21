@@ -1,16 +1,11 @@
 import { useMemo } from 'react';
 import type { PriorityResult } from '@/lib/priority';
 import { buildTotalGraph } from '@/lib/priority';
-import type { DomainId, Scenario } from '@/types/model';
-import { DOMAIN_NAMES } from '@/types/model';
+import type { Scenario } from '@/types/model';
 
-const DOMAIN_COLORS: Record<DomainId, string> = {
-  possession: '#16a34a',
-  position: '#2563eb',
-  control: '#9333ea',
-  hp: '#dc2626',
-  ballTrack: '#ea580c',
-};
+const GRAPH_COLORS = ['#16a34a', '#2563eb', '#9333ea', '#dc2626', '#ea580c', '#0891b2', '#be185d', '#a16207'];
+const graphColor = (gid: string, graphs: Scenario['graphs']) =>
+  GRAPH_COLORS[Math.max(0, Object.keys(graphs).indexOf(gid)) % GRAPH_COLORS.length];
 
 interface Props {
   scenario: Scenario;
@@ -54,9 +49,9 @@ export default function TotalGraphPanel({ scenario, result }: Props) {
   return (
     <div className="p-4 space-y-4">
       <div className="text-sm text-muted-foreground">
-        总状态逻辑超图：跨逻辑域的同名状态已粘合（glue），虚线为超边（多实体联合事件）。
-        布局按 DFS 层深（球权逻辑起点=无球，其余域取首状态）从左到右展开。
-        实体归属：球权/位置/姿态/血量挂角色实体（同职业共享职业技能边），球路挂球实体。
+        总状态逻辑超图：全部逻辑图的同名状态已粘合（glue），虚线为超边（多实体联合事件）。
+        布局按权威总超图 DFS 层深（根=无球）从左到右展开，节点颜色 = 来源逻辑图。
+        实体归属：角色逻辑图由 {scenario.players.length} 个角色共享（技能边按职业区分），球路逻辑独立挂球实体。
       </div>
 
       <div className="border rounded bg-slate-50 dark:bg-slate-900 overflow-auto max-h-[480px]">
@@ -64,7 +59,7 @@ export default function TotalGraphPanel({ scenario, result }: Props) {
           {total.edges.map((e) => {
             const p1 = pos.get(e.from), p2 = pos.get(e.to);
             if (!p1 || !p2) return null;
-            const col = DOMAIN_COLORS[e.domain];
+            const col = graphColor(e.domain, scenario.graphs);
             const back = layerOfNode(e.to) <= layerOfNode(e.from);
             return (
               <g key={e.id}>
@@ -90,7 +85,7 @@ export default function TotalGraphPanel({ scenario, result }: Props) {
                   fill={inMain ? '#ecfdf5' : '#ffffff'} stroke={inMain ? '#059669' : '#64748b'} strokeWidth={inMain ? 3 : 1.5} />
                 <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={12} fontWeight={600} fill="#0f172a">{n.name}</text>
                 <text x={p.x} y={p.y + 40} textAnchor="middle" fontSize={10} fill="#64748b">
-                  {n.domains.map((d) => DOMAIN_NAMES[d]).join('+')}
+                  {n.domains.map((d) => scenario.graphs[d]?.name ?? d).join('+')}
                 </text>
                 {inMain && <text x={p.x} y={p.y - 30} textAnchor="middle" fontSize={10} fill="#059669">主循环</text>}
               </g>
@@ -112,14 +107,14 @@ export default function TotalGraphPanel({ scenario, result }: Props) {
           {total.edges.filter((e) => e.isHyper).length === 0 && <p className="text-muted-foreground">暂无超边。</p>}
           <ul className="list-disc pl-5 space-y-1">
             {total.edges.filter((e) => e.isHyper).map((e) => (
-              <li key={e.id}>{e.event}：{e.fromName} → {e.toName}（{DOMAIN_NAMES[e.domain]}）</li>
+              <li key={e.id}>{e.event}：{e.fromName} → {e.toName}（{scenario.graphs[e.domain]?.name ?? e.domain}）</li>
             ))}
           </ul>
           <h4 className="font-bold mb-2 mt-4">复合结构（compose：状态叠加，互不影响）</h4>
           <p className="text-muted-foreground">
             每个角色的总状态 = 球权 × 位置(网格) × 姿态 × 血量 四个维度叠加；球实体独立拥有球路逻辑。
             当前方案 {scenario.playersPerTeam}v{scenario.playersPerTeam}（{scenario.players.length} 角色 + 1 球）。
-            多人位置联合状态数 = |网格|^角色数，即 12^{scenario.players.length} 种组合（完整状态空间还要 × 其他维度）。
+            多人位置联合状态数 = |网格|^角色数 = 100^{scenario.players.length}（10×10 网格；完整状态空间还要 × 其他维度）。
             图替换式复合的可视化见「复合预览」标签页。
           </p>
         </div>

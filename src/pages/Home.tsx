@@ -8,19 +8,19 @@ import TotalGraphPanel from '@/components/TotalGraphPanel';
 import SearchTreePanel from '@/components/SearchTreePanel';
 import CompositePanel from '@/components/CompositePanel';
 import ProfessionPanel from '@/components/ProfessionPanel';
-import { buildRoster, createDefaultScenario } from '@/lib/defaultScenario';
+import { buildRoster, createDefaultScenario, emptyGraph } from '@/lib/defaultScenario';
 import { computePriorities, suggest } from '@/lib/priority';
 import { deleteScenario, exportScenario, importScenario, listScenarios, loadScenario, newId, saveScenario } from '@/lib/storage';
 import type { DomainEdge, DomainGraph, DomainId, Scenario } from '@/types/model';
-import { DOMAIN_IDS, DOMAIN_NAMES, DOMAIN_OWNER, ENTITY_NAMES } from '@/types/model';
+import { ENTITY_NAMES } from '@/types/model';
 
-const DOMAIN_COLORS: Record<DomainId, string> = {
-  possession: '#16a34a',
-  position: '#2563eb',
-  control: '#9333ea',
-  hp: '#dc2626',
-  ballTrack: '#ea580c',
-};
+// 逻辑图颜色（按 id 前缀取色，自定义图也有稳定颜色）
+const GRAPH_COLORS = ['#16a34a', '#2563eb', '#9333ea', '#dc2626', '#ea580c', '#0891b2', '#be185d', '#a16207'];
+function graphColor(id: string, graphs: Scenario['graphs']): string {
+  const keys = Object.keys(graphs);
+  const i = Math.max(0, keys.indexOf(id));
+  return GRAPH_COLORS[i % GRAPH_COLORS.length];
+}
 
 const TABS = ['图编辑', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '技能模板'] as const;
 
@@ -65,7 +65,30 @@ export default function Home() {
   const graph = scenario.graphs[domain];
 
   const updateGraph = (g: DomainGraph) =>
-    setScenario({ ...scenario, graphs: { ...scenario.graphs, [g.domain]: g } });
+    setScenario({ ...scenario, graphs: { ...scenario.graphs, [g.id]: g } });
+
+  // ---------- 逻辑图管理：自由增删改名 ----------
+  const graphList = Object.values(scenario.graphs);
+  const addGraph = (owner: 'player' | 'ball') => {
+    const name = window.prompt(`新逻辑图名称（挂在${ENTITY_NAMES[owner]}上）`, '新逻辑图');
+    if (!name) return;
+    const g = emptyGraph(owner, name);
+    setScenario({ ...scenario, graphs: { ...scenario.graphs, [g.id]: g } });
+    setDomain(g.id);
+  };
+  const renameGraph = (g: DomainGraph) => {
+    const name = window.prompt('逻辑图名称', g.name);
+    if (name) updateGraph({ ...g, name });
+  };
+  const removeGraph = (g: DomainGraph) => {
+    const sameOwner = graphList.filter((x) => x.owner === g.owner);
+    if (sameOwner.length <= 1) { alert(`${ENTITY_NAMES[g.owner]}至少需要保留一张逻辑图`); return; }
+    if (!confirm(`删除逻辑图「${g.name}」？其中 ${g.nodes.length} 个状态、${g.edges.length} 条事件将一并删除。`)) return;
+    const next = { ...scenario.graphs };
+    delete next[g.id];
+    setScenario({ ...scenario, graphs: next });
+    setDomain(Object.values(next).find((x) => x.owner === g.owner)?.id ?? Object.keys(next)[0]);
+  };
 
   const updateEdge = (edge: DomainEdge) =>
     updateGraph({ ...graph, edges: graph.edges.map((e) => (e.id === edge.id ? edge : e)) });
@@ -163,29 +186,41 @@ export default function Home() {
               {(['player', 'ball'] as const).map((kind) => (
                 <div key={kind} className="flex gap-1 flex-wrap items-center">
                   <span className="text-xs font-bold text-muted-foreground w-16">{ENTITY_NAMES[kind]}</span>
-                  {DOMAIN_IDS.filter((d) => DOMAIN_OWNER[d] === kind).map((d) => (
-                    <button key={d} onClick={() => setDomain(d)}
-                      className={`px-3 py-1 rounded text-sm border ${domain === d ? 'text-white' : 'bg-background'}`}
-                      style={domain === d ? { background: DOMAIN_COLORS[d] } : { borderColor: DOMAIN_COLORS[d], color: DOMAIN_COLORS[d] }}>
-                      {DOMAIN_NAMES[d]}
+                  {graphList.filter((g) => g.owner === kind).map((g) => (
+                    <button key={g.id} onClick={() => setDomain(g.id)}
+                      className={`px-3 py-1 rounded text-sm border ${domain === g.id ? 'text-white' : 'bg-background'}`}
+                      style={domain === g.id ? { background: graphColor(g.id, scenario.graphs) } : { borderColor: graphColor(g.id, scenario.graphs), color: graphColor(g.id, scenario.graphs) }}>
+                      {g.name}
                     </button>
                   ))}
+                  <button onClick={() => addGraph(kind)}
+                    className="px-2 py-1 rounded text-xs border border-dashed text-muted-foreground hover:bg-muted">
+                    ＋添加逻辑图
+                  </button>
                 </div>
               ))}
-              <div className="text-xs text-muted-foreground">
-                状态节点按实体类型公用：{scenario.players.length} 个角色共享角色逻辑图（技能边按职业区分），1 个球独立拥有球路逻辑；跨逻辑域同名状态在总超图中自动粘合。
+              <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                <span>
+                  实体上的状态逻辑图可自由增删改名；{scenario.players.length} 个角色共享角色逻辑图（技能边按职业区分），1 个球独立拥有球路逻辑；跨逻辑图同名状态在总超图中自动粘合，权威优先级 = 总超图 DFS。
+                </span>
+                {graph && (
+                  <span className="flex gap-1 ml-auto">
+                    <button onClick={() => renameGraph(graph)} className="px-2 py-0.5 border rounded hover:bg-muted">改名</button>
+                    <button onClick={() => removeGraph(graph)} className="px-2 py-0.5 border rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-950">删除此图</button>
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex-1 overflow-auto">
               <div className="p-2 h-full min-w-[920px] min-h-[560px]">
-                <GraphCanvas graph={graph} onChange={updateGraph} onEditEdge={setEditingEdgeId} color={DOMAIN_COLORS[domain]} />
+                <GraphCanvas graph={graph} onChange={updateGraph} onEditEdge={setEditingEdgeId} color={graphColor(domain, scenario.graphs)} />
               </div>
             </div>
           </div>
         )}
         {tab === '复合预览' && <CompositePanel scenario={scenario} />}
         {tab === '总超图' && <TotalGraphPanel scenario={scenario} result={result} />}
-        {tab === 'DFS 搜索树' && <SearchTreePanel result={result} />}
+        {tab === 'DFS 搜索树' && <SearchTreePanel scenario={scenario} result={result} alpha={alpha} />}
         {tab === '优先级计算' && <PriorityPanel result={result} scenario={scenario} alpha={alpha} onAlpha={setAlpha} />}
         {tab === '参数建议' && (
           <SuggestPanel scenario={scenario} result={result} suggestions={suggestions}
@@ -201,7 +236,7 @@ export default function Home() {
 
       <EdgeDialog edge={editingEdge} fromName={editingFrom} toName={editingTo}
         skills={scenario.skills} professions={scenario.professions}
-        showProfessions={DOMAIN_OWNER[domain] === 'player'}
+        showProfessions={graph.owner === 'player'}
         onSave={updateEdge} onClose={() => setEditingEdgeId(null)} />
     </div>
   );

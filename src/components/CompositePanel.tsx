@@ -1,10 +1,10 @@
 // 复合（compose）结果显示：把替换图嵌入宿主图的每个状态点（图替换式叠加，非笛卡尔积连线）
 import { useMemo, useState } from 'react';
 import { compositeStats } from '@/lib/priority';
-import type { DomainId, Scenario } from '@/types/model';
-import { DOMAIN_IDS, DOMAIN_NAMES } from '@/types/model';
+import type { Scenario } from '@/types/model';
+import { ENTITY_NAMES } from '@/types/model';
 
-const COLORS: Record<DomainId, string> = {
+const COLORS: Record<string, string> = {
   possession: '#16a34a',
   position: '#2563eb',
   control: '#9333ea',
@@ -17,8 +17,8 @@ interface Props {
 }
 
 export default function CompositePanel({ scenario }: Props) {
-  const [host, setHost] = useState<DomainId>('possession');
-  const [guest, setGuest] = useState<DomainId>('position');
+  const [host, setHost] = useState<string>('possession');
+  const [guest, setGuest] = useState<string>('position');
 
   const A = scenario.graphs[host];
   const B = scenario.graphs[guest];
@@ -55,14 +55,14 @@ export default function CompositePanel({ scenario }: Props) {
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-3 text-sm flex-wrap">
         <span>宿主图（每个状态点被替换）：</span>
-        <select value={host} onChange={(e) => setHost(e.target.value as DomainId)}
+        <select value={host} onChange={(e) => setHost(e.target.value)}
           className="border rounded px-2 py-1 bg-background">
-          {DOMAIN_IDS.map((d) => <option key={d} value={d}>{DOMAIN_NAMES[d]}</option>)}
+          {Object.values(scenario.graphs).map((g) => <option key={g.id} value={g.id}>{g.name}（{ENTITY_NAMES[g.owner]}）</option>)}
         </select>
         <span>替换图（嵌入副本）：</span>
-        <select value={guest} onChange={(e) => setGuest(e.target.value as DomainId)}
+        <select value={guest} onChange={(e) => setGuest(e.target.value)}
           className="border rounded px-2 py-1 bg-background">
-          {DOMAIN_IDS.map((d) => <option key={d} value={d}>{DOMAIN_NAMES[d]}</option>)}
+          {Object.values(scenario.graphs).map((g) => <option key={g.id} value={g.id}>{g.name}（{ENTITY_NAMES[g.owner]}）</option>)}
         </select>
         {same && <span className="text-amber-600">宿主与替换相同：每个状态点嵌入自身副本（自复合）</span>}
       </div>
@@ -97,7 +97,7 @@ export default function CompositePanel({ scenario }: Props) {
             <g key={c.node.id}>
               <circle cx={c.x} cy={c.y} r={92} fill="#ffffff" opacity={0.6} stroke={COLORS[host]} strokeWidth={1.5} strokeDasharray="3 3" />
               <text x={c.x} y={c.y - 100} textAnchor="middle" fontSize={12} fontWeight={700} fill={COLORS[host]}>
-                {c.node.name.length > 8 ? c.node.name.slice(0, 8) : c.node.name}
+                {c.node.name.length > 10 ? c.node.name.slice(0, 10) : c.node.name}
               </text>
               {/* 替换图缩略（副本） */}
               {layout.minis.map((m) => (
@@ -105,12 +105,12 @@ export default function CompositePanel({ scenario }: Props) {
                   <line x1={c.x} y1={c.y} x2={c.x + m.dx} y2={c.y + m.dy} stroke={COLORS[guest]} strokeWidth={0.8} opacity={0.4} />
                   <circle cx={c.x + m.dx} cy={c.y + m.dy} r={layout.miniR} fill="#fff" stroke={COLORS[guest]} strokeWidth={1.2} />
                   <text x={c.x + m.dx} y={c.y + m.dy + 3} textAnchor="middle" fontSize={8} fill="#0f172a">
-                    {m.node.name.length > 5 ? m.node.name.slice(0, 5) : m.node.name}
+                    {m.node.name.length > 4 ? m.node.name.slice(0, 4) : m.node.name}
                   </text>
                 </g>
               ))}
               <circle cx={c.x} cy={c.y} r={7} fill={COLORS[host]} />
-              <title>{`${c.node.name} × ${DOMAIN_NAMES[guest]}（${stats.guestNodeCount} 个替换状态）`}</title>
+              <title>{`${c.node.name} × ${scenario.graphs[guest]?.name ?? guest}（${stats.guestNodeCount} 个替换状态）`}</title>
             </g>
           ))}
         </svg>

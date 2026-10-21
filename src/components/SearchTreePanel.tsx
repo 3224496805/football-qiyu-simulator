@@ -1,25 +1,43 @@
-// DFS 有向搜索树可视化：树边实线、回边虚线（成环证据），节点按首次访问层深分列
+// DFS 有向搜索树可视化
+// 权威视图 = 总状态逻辑超图的 DFS（全部逻辑图粘合后统一搜索）
+// 单图视图 = 某张逻辑图独立的 DFS（参考）
 import { useMemo, useState } from 'react';
+import { analyzeSingleGraph } from '@/lib/priority';
 import type { DomainResult, PriorityResult } from '@/lib/priority';
-import type { DomainId } from '@/types/model';
-import { DOMAIN_IDS, DOMAIN_NAMES } from '@/types/model';
+import type { Scenario } from '@/types/model';
+import { ENTITY_NAMES } from '@/types/model';
 
-const COLORS: Record<DomainId, string> = {
-  possession: '#16a34a',
-  position: '#2563eb',
-  control: '#9333ea',
-  hp: '#dc2626',
-  ballTrack: '#ea580c',
-};
+const GRAPH_COLORS = ['#16a34a', '#2563eb', '#9333ea', '#dc2626', '#ea580c', '#0891b2', '#be185d', '#a16207'];
 
 interface Props {
+  scenario: Scenario;
   result: PriorityResult;
+  alpha: number;
 }
 
-export default function SearchTreePanel({ result }: Props) {
-  const [domain, setDomain] = useState<DomainId>('possession');
-  const r: DomainResult = result.byDomain[domain];
-  const dfs = r.dfs;
+export default function SearchTreePanel({ scenario, result, alpha }: Props) {
+  const graphIds = Object.keys(scenario.graphs);
+  const [sel, setSel] = useState<string>('__total__');
+  const single: DomainResult | null = useMemo(
+    () => (sel === '__total__' ? null : analyzeSingleGraph(scenario, sel, alpha)),
+    [scenario, sel, alpha],
+  );
+  const color = sel === '__total__'
+    ? '#0f766e'
+    : GRAPH_COLORS[Math.max(0, graphIds.indexOf(sel)) % GRAPH_COLORS.length];
+
+  // 统一视图数据
+  const view = single ?? {
+    domain: '__total__',
+    graphName: '总状态逻辑超图（全部逻辑图粘合）',
+    scores: result.scores,
+    dfs: result.dfs,
+    cycles: result.cycles,
+    diameter: 0,
+    subtreeDepthOf: new Map<string, number>(),
+  };
+  const dfs = view.dfs;
+  const scores = view.scores;
 
   // 布局：每层一列，列内按访问顺序排列
   const { pos, width, height } = useMemo(() => {
@@ -29,12 +47,12 @@ export default function SearchTreePanel({ result }: Props) {
       if (!byDepth.has(d)) byDepth.set(d, []);
       byDepth.get(d)!.push(id);
     }
-    const m = new Map<string, { x: number; y: number; depth: number; order: number }>();
-    const GX = 190, GY = 84, X0 = 110, Y0 = 80;
+    const m = new Map<string, { x: number; y: number; depth: number }>();
+    const GX = 185, GY = 80, X0 = 110, Y0 = 80;
     let maxCount = 1;
     for (const ids of byDepth.values()) maxCount = Math.max(maxCount, ids.length);
     for (const [d, ids] of byDepth) {
-      ids.forEach((id, i) => m.set(id, { x: X0 + d * GX, y: Y0 + i * GY, depth: d, order: i }));
+      ids.forEach((id, i) => m.set(id, { x: X0 + d * GX, y: Y0 + i * GY, depth: d }));
     }
     const maxD = Math.max(0, ...byDepth.keys());
     return {
@@ -44,36 +62,40 @@ export default function SearchTreePanel({ result }: Props) {
     };
   }, [dfs]);
 
-  // 节点 id → 状态名（从边引用反查；根节点也从出边反查）
+  // 节点 id → 状态名（从边引用反查）
   const nodeName = (id: string) =>
-    r.scores.find((s) => s.edge.from === id)?.edge.fromName ??
-    r.scores.find((s) => s.edge.to === id)?.edge.toName ??
-    id;
-
-  const short = r.cycles.shortCycles.flat().join('、');
+    scores.find((s) => s.edge.from === id)?.edge.fromName ??
+    scores.find((s) => s.edge.to === id)?.edge.toName ??
+    (id === dfs.rootId ? '（根）' : id);
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex gap-1 flex-wrap items-center">
-        {DOMAIN_IDS.map((d) => (
-          <button key={d} onClick={() => setDomain(d)}
-            className={`px-3 py-1 rounded text-sm border ${domain === d ? 'text-white' : 'bg-background'}`}
-            style={domain === d ? { background: COLORS[d] } : { borderColor: COLORS[d], color: COLORS[d] }}>
-            {DOMAIN_NAMES[d]}
+        <button onClick={() => setSel('__total__')}
+          className={`px-3 py-1 rounded text-sm border font-bold ${sel === '__total__' ? 'text-white' : 'bg-background'}`}
+          style={sel === '__total__' ? { background: '#0f766e' } : { borderColor: '#0f766e', color: '#0f766e' }}>
+          总超图（权威）
+        </button>
+        {graphIds.map((gid, i) => (
+          <button key={gid} onClick={() => setSel(gid)}
+            className={`px-3 py-1 rounded text-sm border ${sel === gid ? 'text-white' : 'bg-background'}`}
+            style={sel === gid ? { background: GRAPH_COLORS[i % GRAPH_COLORS.length] } : { borderColor: GRAPH_COLORS[i % GRAPH_COLORS.length], color: GRAPH_COLORS[i % GRAPH_COLORS.length] }}>
+            {scenario.graphs[gid].name}
           </button>
         ))}
-        <span className="text-xs text-muted-foreground ml-2">
-          DFS 从「{nodeName(dfs.rootId)}」出发生成有向搜索树 ·
-          最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size}（回边 = 成环证据）
-          {dfs.unreachable.length > 0 && <> · <span className="text-amber-600">不可达：{dfs.unreachable.join('、')}</span></>}
-        </span>
+      </div>
+      <div className="text-xs text-muted-foreground">
+        {sel === '__total__'
+          ? '权威视图：跨逻辑图同名状态已粘合，DFS 在此总超图上统一生成搜索树，优先级排名以此为准。'
+          : `参考视图：单张逻辑图独立的 DFS（${ENTITY_NAMES[scenario.graphs[sel].owner]}），不参与权威排名。`}
+        {' '}DFS 从「{nodeName(dfs.rootId)}」出发 · 最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size}（回边 = 成环证据）
+        {dfs.unreachable.length > 0 && <> · <span className="text-amber-600">不可达 {dfs.unreachable.length} 个：{dfs.unreachable.slice(0, 12).join('、')}{dfs.unreachable.length > 12 ? '…' : ''}</span></>}
       </div>
 
       <div className="border rounded bg-slate-50 dark:bg-slate-900 overflow-auto max-h-[520px]">
         <svg width={width} height={height}>
-          {/* 层深参考线 */}
           {[...new Set([...pos.values()].map((p) => p.depth))].sort((a, b) => a - b).map((d) => {
-            const x = 110 + d * 190;
+            const x = 110 + d * 185;
             return (
               <g key={d}>
                 <line x1={x} y1={30} x2={x} y2={height - 20} stroke="#94a3b8" strokeWidth={0.5} strokeDasharray="2 6" opacity={0.5} />
@@ -81,14 +103,13 @@ export default function SearchTreePanel({ result }: Props) {
               </g>
             );
           })}
-          {/* 边：树边实线，回边红色虚线 */}
-          {r.scores.map((s) => {
+          {scores.map((s) => {
             const p1 = pos.get(s.edge.from), p2 = pos.get(s.edge.to);
             if (!p1 || !p2) return null;
             const isTree = dfs.treeEdgeIds.has(s.edge.id);
             const isBack = dfs.backEdgeIds.has(s.edge.id);
-            if (!isTree && !isBack) return null; // 前向/横边不在树上显示
-            const col = isBack ? '#dc2626' : COLORS[domain];
+            if (!isTree && !isBack) return null;
+            const col = isBack ? '#dc2626' : color;
             const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2 - 18;
             return (
               <g key={s.edge.id}>
@@ -107,23 +128,23 @@ export default function SearchTreePanel({ result }: Props) {
               </g>
             );
           })}
-          {/* 节点 */}
           {dfs.visitOrder.map((id) => {
             const p = pos.get(id);
             if (!p) return null;
-            const inMain = r.cycles.mainCycle.includes(nodeName(id));
+            const nm = nodeName(id);
+            const inMain = view.cycles.mainCycle.includes(nm);
             return (
               <g key={id}>
                 <circle cx={p.x} cy={p.y} r={24}
                   fill={inMain ? '#ecfdf5' : '#fff'}
-                  stroke={inMain ? '#059669' : COLORS[domain]} strokeWidth={inMain ? 3 : 2} />
+                  stroke={inMain ? '#059669' : color} strokeWidth={inMain ? 3 : 2} />
                 <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={12} fontWeight={600} fill="#0f172a">
-                  {nodeName(id).length > 6 ? nodeName(id).slice(0, 6) : nodeName(id)}
+                  {nm.length > 6 ? nm.slice(0, 6) : nm}
                 </text>
                 <text x={p.x} y={p.y + 42} textAnchor="middle" fontSize={10} fill="#64748b">
                   d={p.depth}{inMain ? ' · 主循环' : ''}
                 </text>
-                <title>{nodeName(id)}（层深 {p.depth}）</title>
+                <title>{nm}（层深 {p.depth}）</title>
               </g>
             );
           })}
@@ -133,35 +154,37 @@ export default function SearchTreePanel({ result }: Props) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
         <div className="border rounded p-3">
           <h4 className="font-bold mb-2">事件 → DFS 层深（同一事件可在不同分支处于不同层深）</h4>
-          <table className="w-full text-xs">
-            <thead className="bg-muted">
-              <tr><th className="p-1 text-left">事件</th><th className="p-1 text-left">转换</th><th className="p-1 text-left">层深集合</th></tr>
-            </thead>
-            <tbody>
-              {[...dfs.depthsOfEdge.entries()].sort((a, b) => a[1][0] - b[1][0]).map(([ev, ds]) => {
-                const s = r.scores.find((x) => x.edge.event === ev);
-                return (
-                  <tr key={ev} className="border-t">
-                    <td className="p-1 font-medium">{ev}{s?.isBackEdge ? ' ↩' : ''}</td>
-                    <td className="p-1 text-muted-foreground">{s ? `${s.edge.fromName} → ${s.edge.toName}` : '—'}</td>
-                    <td className="p-1 font-mono">{'{'}{ds.sort((a, b) => a - b).join(', ')}{'}'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="max-h-64 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0">
+                <tr><th className="p-1 text-left">事件</th><th className="p-1 text-left">转换</th><th className="p-1 text-left">层深集合</th></tr>
+              </thead>
+              <tbody>
+                {[...dfs.depthsOfEdge.entries()].sort((a, b) => a[1][0] - b[1][0]).map(([ev, ds]) => {
+                  const s = scores.find((x) => x.edge.event === ev);
+                  return (
+                    <tr key={ev} className="border-t">
+                      <td className="p-1 font-medium">{ev}{s?.isBackEdge ? ' ↩' : ''}</td>
+                      <td className="p-1 text-muted-foreground">{s ? `${s.edge.fromName} → ${s.edge.toName}` : '—'}</td>
+                      <td className="p-1 font-mono">{'{'}{[...ds].sort((a, b) => a - b).join(', ')}{'}'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
         <div className="border rounded p-3">
           <h4 className="font-bold mb-2">DFS 统计</h4>
           <ul className="list-disc pl-5 space-y-1 text-xs">
             <li>起点（根）：{nodeName(dfs.rootId)}</li>
-            <li>访问节点 {dfs.visitOrder.length} / {r.scores.length ? dfs.visitOrder.length + dfs.unreachable.length : 0}，最大层深 {dfs.maxDepth}</li>
+            <li>访问节点 {dfs.visitOrder.length}，最大层深 {dfs.maxDepth}</li>
             <li>树边 {dfs.treeEdgeIds.size} 条，回边 {dfs.backEdgeIds.size} 条（回边构成环）</li>
-            <li>主循环（最大 SCC）：{r.cycles.mainCycle.length > 0 ? r.cycles.mainCycle.join('→') : '（无环）'}</li>
-            <li className={r.cycles.shortCycles.length > 0 ? 'text-red-600' : ''}>
-              短环（&lt;4）：{r.cycles.shortCycles.length > 0 ? r.cycles.shortCycles.map((c) => c.join('→')).join('；') : '无'}
+            <li>主循环（最大 SCC）：{view.cycles.mainCycle.length > 0 ? view.cycles.mainCycle.slice(0, 20).join('→') + (view.cycles.mainCycle.length > 20 ? '…' : '') : '（无环）'}</li>
+            <li className={view.cycles.shortCycles.length > 0 ? 'text-red-600' : ''}>
+              短环（&lt;4）：{view.cycles.shortCycles.length > 0 ? view.cycles.shortCycles.slice(0, 8).map((c) => c.join('→')).join('；') : '无'}
             </li>
-            {short && <li>优先级语义：通往深层/主循环路上的事件高分，短环内事件 ×0.3 惩罚</li>}
+            <li className="text-muted-foreground">优先级语义：通往深层/主循环路上的事件高分，短环内事件 ×0.3 惩罚</li>
           </ul>
         </div>
       </div>

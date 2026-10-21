@@ -28,7 +28,7 @@ export default function ProfessionPanel({ scenario, onChange }: Props) {
   const edgesByProfession = (profId: string) => {
     const out: string[] = [];
     for (const g of Object.values(scenario.graphs)) {
-      if (g.domain === 'ballTrack') continue;
+      if (g.owner === 'ball') continue;
       for (const e of g.edges) {
         if (e.professionIds?.includes(profId)) out.push(`${e.event}（${g.name}）`);
       }

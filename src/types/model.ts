@@ -1,32 +1,14 @@
-// 足球奇域模拟器 · 数据模型 v3
-// 实体严格区分：角色实体（球权/位置/姿态/血量） vs 球实体（球路）
-// 职业系统：同职业共享相同技能事件（伤害/位移），不同职业不同技能事件
-export type DomainId = 'possession' | 'position' | 'control' | 'hp' | 'ballTrack';
-
-export const DOMAIN_IDS: DomainId[] = ['possession', 'position', 'control', 'hp', 'ballTrack'];
+// 足球奇域模拟器 · 数据模型 v4
+// 实体严格区分：角色实体 vs 球实体
+// 逻辑图可自由增删：每个实体上可挂任意数量的状态逻辑图
+// 权威优先级 = 总状态逻辑超图（跨图同名状态粘合）上的 DFS 搜索树
+export type DomainId = string; // 逻辑图 id（可自由增删，如 possession / position / myGraph）
 
 export type EntityKind = 'player' | 'ball';
-
-// 每个逻辑域挂在哪类实体上
-export const DOMAIN_OWNER: Record<DomainId, EntityKind> = {
-  possession: 'player',  // 球权逻辑：持球/无球，挂在角色身上
-  position: 'player',    // 位置逻辑：网格点坐标，挂在角色身上
-  control: 'player',     // 姿态控制：自由/受控/霸体/僵直/倒地
-  hp: 'player',          // 血量逻辑
-  ballTrack: 'ball',     // 球路逻辑：传球飞行/落地滚动/自由/被拿，挂在球实体上
-};
 
 export const ENTITY_NAMES: Record<EntityKind, string> = {
   player: '角色实体',
   ball: '球实体',
-};
-
-export const DOMAIN_NAMES: Record<DomainId, string> = {
-  possession: '球权逻辑',
-  position: '位置逻辑（网格）',
-  control: '姿态控制',
-  hp: '血量逻辑',
-  ballTrack: '球路逻辑',
 };
 
 export interface StateNode {
@@ -40,7 +22,7 @@ export interface StateNode {
 export type SkillKind = 'damage' | 'displacement';
 
 export interface EventParams {
-  basePriority: number;  // 手动基础优先级（默认序：传7 掉6 射5 打断6 蓄力更新4 拿3 激活2 关闭1）
+  basePriority: number;  // 手动基础优先级
   cooldown: number;      // 冷却 tick
   structWeight: number;  // 结构权重
 }
@@ -59,8 +41,9 @@ export interface DomainEdge {
 }
 
 export interface DomainGraph {
-  domain: DomainId;
-  name: string;
+  id: DomainId;         // = 键名
+  owner: EntityKind;    // 挂在哪类实体上
+  name: string;         // 逻辑图名（可改）
   nodes: StateNode[];
   edges: DomainEdge[];
 }
@@ -98,12 +81,12 @@ export interface BalanceParams {
 
 export interface Scenario {
   id: string;
-  version: number;          // 结构版本，用于存量数据迁移（当前 3）
+  version: number;          // 结构版本，用于存量数据迁移（当前 4）
   name: string;
   playersPerTeam: number;   // 默认 3（总数 6），上限 4（总数 8）
   professions: Profession[];
   players: PlayerSpec[];    // 全体球员名册（两队），长度 = playersPerTeam × 2
-  graphs: Record<DomainId, DomainGraph>;
+  graphs: Record<DomainId, DomainGraph>; // 实体上的状态逻辑图（可自由增删）
   skills: SkillTemplate[];
   balance: BalanceParams;
   createdAt: number;

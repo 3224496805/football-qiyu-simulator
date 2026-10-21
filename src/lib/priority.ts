@@ -1,57 +1,60 @@
-// 核心算法：总超图构建（粘合/复合）+ DFS 有向搜索树 + 主循环识别 + 优先级评分
+// 核心算法：总超图构建（粘合）+ DFS 有向搜索树 + 主循环识别 + 优先级评分
+//
+// 【权威流程】v4：把实体上所有逻辑图经同名状态粘合（glue）为总状态逻辑超图，
+// 对总超图做 DFS 生成有向搜索树，全部事件在这棵树上统一评分排名 —— 这就是权威优先级。
+// 各逻辑图内的 DFS 视图仅作参考。
 //
 // 优先级语义（用户定稿）：
 //   DFS 从起点（无球）生成有向搜索树；一个事件在搜索树的不同分支上可以处于不同层深。
 //   目标 = 尽量避免状态陷入短死循环、让全局状态处于大的主循环中。
 //   因此不是"层深大就优先"，而是"在通往深层/主循环路上的事件"优先：
 //     路径分 = 距主循环越近越高（0.6 权重） + 子树能到达的层深越深越高（0.4 权重）
-//   短环（<tau）内事件 ×0.3 惩罚；再叠加 α·手动分；同分按默认序（传>掉>射>蓄力更新>拿>激活>关闭）。
-import type { DomainEdge, DomainId, Scenario } from '@/types/model';
-import { defaultOrderIndex, DOMAIN_NAMES } from '@/types/model';
+//   短环（<tau）内事件 ×0.3 惩罚；再叠加 α·手动分；同分按默认序。
+import type { DomainEdge, Scenario } from '@/types/model';
+import { defaultOrderIndex } from '@/types/model';
 
 export interface MergedNode {
   id: string;          // 粘合后的节点 id（同名状态合并）
   name: string;        // 状态名
-  domains: DomainId[]; // 来源逻辑域
+  domains: string[];   // 来源逻辑图 id
   depths?: number[];   // DFS 首次访问层深（可能有多个来源域）
 }
 
 export interface TotalEdge extends DomainEdge {
   fromName: string;
   toName: string;
-  domain: DomainId;
+  domain: string;      // 来源逻辑图 id
 }
 
 export interface TotalGraph {
   nodes: MergedNode[];
   edges: TotalEdge[];
-  gluedPairs: string[]; // 粘合说明（"持球@球逻辑 ~ 持球@控制逻辑"）
+  gluedPairs: string[]; // 粘合说明（"持球@球权逻辑 ~ 持球@其他图"）
 }
 
-// ---------- 1. 总超图构建：跨域同名状态粘合（glue） ----------
+// ---------- 1. 总超图构建：跨逻辑图同名状态粘合（glue） ----------
 export function buildTotalGraph(sc: Scenario): TotalGraph {
   const byName = new Map<string, MergedNode>();
   const edges: TotalEdge[] = [];
   const gluedPairs: string[] = [];
 
-  for (const domain of Object.keys(sc.graphs) as DomainId[]) {
-    const g = sc.graphs[domain];
+  for (const [gid, g] of Object.entries(sc.graphs)) {
     for (const n of g.nodes) {
       const exist = byName.get(n.name);
       if (exist) {
-        if (!exist.domains.includes(domain)) {
-          exist.domains.push(domain);
+        if (!exist.domains.includes(gid)) {
+          exist.domains.push(gid);
           gluedPairs.push(`${n.name} @${g.name}`);
         }
       } else {
-        byName.set(n.name, { id: `n_${n.name}`, name: n.name, domains: [domain] });
+        byName.set(n.name, { id: `n_${n.name}`, name: n.name, domains: [gid] });
       }
     }
     for (const e of g.edges) {
       const from = g.nodes.find((n) => n.id === e.from);
       const to = g.nodes.find((n) => n.id === e.to);
       if (!from || !to) continue;
-      edges.push({ ...e, from: `n_${from.name}`, to: `n_${to.name}`, fromName: from.name, toName: to.name, domain });
+      edges.push({ ...e, from: `n_${from.name}`, to: `n_${to.name}`, fromName: from.name, toName: to.name, domain: gid });
     }
   }
   return { nodes: [...byName.values()], edges, gluedPairs };
@@ -63,11 +66,11 @@ export interface DfsResult {
   depthOf: Map<string, number>;          // 节点首次访问的 DFS 树层深
   parentOf: Map<string, string>;         // DFS 树父节点 id
   treeEdgeOf: Map<string, string>;       // 节点 -> 到达它的树边 id
-  depthsOfEdge: Map<string, number[]>;   // 事件名 -> 出现过的层深集合（同一事件可多层）
+  depthsOfEdge: Map<string, number[]>;     // 事件名 -> 出现过的层深集合（同一事件可多层）
   treeEdgeIds: Set<string>;              // 树边
   backEdgeIds: Set<string>;              // 回边（指向栈上祖先 = 成环证据）
   maxDepth: number;                      // 树的最大层深
-  unreachable: string[];                 // 从起点不可达的状态
+  unreachable: string[];               // 从起点不可达的状态
   visitOrder: string[];                  // 节点首次访问顺序
 }
 
@@ -114,7 +117,6 @@ export function dfsFromFree(total: TotalGraph, startName = '无球'): DfsResult 
     const e = list[frame.iter++];
     pushDepth(e.event, frame.depth + 1);
     if (!depthOf.has(e.to)) {
-      // 树边：首次访问
       depthOf.set(e.to, frame.depth + 1);
       parentOf.set(e.to, frame.node);
       treeEdgeOf.set(e.to, e.id);
@@ -125,7 +127,6 @@ export function dfsFromFree(total: TotalGraph, startName = '无球'): DfsResult 
     } else if (onStack.has(e.to)) {
       backEdgeIds.add(e.id); // 回边 → 环
     }
-    // 其余为前向边/横边（指向已访问且不在栈上的节点），不参与树结构
   }
 
   const maxDepth = Math.max(0, ...[...depthOf.values()]);
@@ -182,7 +183,7 @@ export function findCycles(total: TotalGraph, tau = 4, depthOf?: Map<string, num
   for (const n of total.nodes) if (!index.has(n.id)) strongconnect(n.id);
 
   const named = sccs.map((s) => s.map((id) => total.nodes.find((n) => n.id === id)?.name ?? id));
-  // 主循环 = 节点数最多的 SCC（平局取 DFS 层深更深的）
+  // 主循环 = 节点数最多的 SCC（平局取成员 DFS 层深更深的）
   const depthRank = [...named.keys()].sort((a, b) => {
     if (named[b].length !== named[a].length) return named[b].length - named[a].length;
     const maxD = (idx: number) => Math.max(0, ...sccs[idx].map((id) => depthOf?.get(id) ?? 0));
@@ -204,32 +205,39 @@ export interface EdgeScore {
   structWeight: number;
   manualScore: number;   // 手动优先级归一分
   finalScore: number;
-  rank: number;          // 全局名次（跨逻辑域合并排序）
+  rank: number;          // 权威名次（总超图统一排名）
   inMainCycle: boolean;
   inShortCycle: boolean;
   isBackEdge: boolean;   // 回边（成环边）
 }
 
 export interface DomainResult {
-  domain: DomainId;
-  scores: EdgeScore[];   // 域内排序
-  dfs: DfsResult;
-  cycles: CycleInfo;
-  diameter: number;      // 距主循环的最远半径
-  subtreeDepthOf: Map<string, number>; // 节点 DFS 子树可达最大层深
+  domain: string;        // 逻辑图 id
+  graphName: string;
+  scores: EdgeScore[];   // 该图内事件（含其权威分数）
+  dfs: DfsResult;        // 单图 DFS（参考视图）
+  cycles: CycleInfo;       // 单图环（参考视图）
+  diameter: number;
+  subtreeDepthOf: Map<string, number>;
 }
 
 export interface PriorityResult {
-  scores: EdgeScore[];                 // 全部逻辑域合并后的总排名
-  byDomain: Record<DomainId, DomainResult>;
+  total: TotalGraph;                  // 总状态逻辑超图
+  dfs: DfsResult;                     // 总超图 DFS 搜索树（权威）
+  cycles: CycleInfo;                  // 总超图主循环/短环（权威）
+  scores: EdgeScore[];                // 权威总排名（全部事件）
+  byDomain: Record<string, DomainResult>; // 各逻辑图参考视图
   alpha: number;
 }
 
-// 单图分析（DFS 搜索树 → 主循环 → 评分）
-function analyzeGraph(total: TotalGraph, alpha: number, tau: number, domain: DomainId): DomainResult {
-  const dfs = dfsFromFree(total);
-  const cycles = findCycles(total, tau, dfs.depthOf);
-
+// 统一评分核心：给定图 + 其 DFS + 其环信息，为每条边打分
+function scoreEdges(
+  total: TotalGraph,
+  dfs: DfsResult,
+  cycles: CycleInfo,
+  alpha: number,
+  tau = 4,
+): { scores: EdgeScore[]; diameter: number; subtreeDepthOf: Map<string, number> } {
   // dist(node, 主循环)：反向 BFS
   const dist = new Map<string, number>();
   const mainIds = new Set<string>();
@@ -283,18 +291,18 @@ function analyzeGraph(total: TotalGraph, alpha: number, tau: number, domain: Dom
     return { edge, depths, depthScore, pathScore, cyclePenalty, structWeight, manualScore: +manualScore.toFixed(3), finalScore, rank: 0, inMainCycle: inMain, inShortCycle: inShort, isBackEdge };
   });
 
-  scores.sort((a, b) =>
-    b.finalScore - a.finalScore ||
-    b.edge.params.basePriority - a.edge.params.basePriority ||
-    defaultOrderIndex(a.edge.event) - defaultOrderIndex(b.edge.event) ||
-    a.edge.event.localeCompare(b.edge.event, 'zh'));
-
-  return { domain, scores, dfs, cycles, diameter, subtreeDepthOf };
+  return { scores, diameter, subtreeDepthOf };
 }
 
-// 域图 → TotalGraph 结构（复合 = 各逻辑域独立叠加，分别 DFS）
-function buildDomainTotal(g: Scenario['graphs'][DomainId]): TotalGraph {
-  const nodes: MergedNode[] = g.nodes.map((n) => ({ id: `n_${n.name}`, name: n.name, domains: [g.domain] }));
+const sortScores = (a: EdgeScore, b: EdgeScore) =>
+  b.finalScore - a.finalScore ||
+  b.edge.params.basePriority - a.edge.params.basePriority ||
+  defaultOrderIndex(a.edge.event) - defaultOrderIndex(b.edge.event) ||
+  a.edge.event.localeCompare(b.edge.event, 'zh');
+
+// 单逻辑图 → TotalGraph 结构（参考分析用）
+function buildDomainTotal(g: Scenario['graphs'][string]): TotalGraph {
+  const nodes: MergedNode[] = g.nodes.map((n) => ({ id: `n_${n.name}`, name: n.name, domains: [g.id] }));
   const edges: TotalEdge[] = g.edges
     .filter((e) => g.nodes.some((n) => n.id === e.from) && g.nodes.some((n) => n.id === e.to))
     .map((e) => ({
@@ -303,28 +311,47 @@ function buildDomainTotal(g: Scenario['graphs'][DomainId]): TotalGraph {
       to: `n_${g.nodes.find((n) => n.id === e.to)!.name}`,
       fromName: g.nodes.find((n) => n.id === e.from)!.name,
       toName: g.nodes.find((n) => n.id === e.to)!.name,
-      domain: g.domain,
+      domain: g.id,
     }));
   return { nodes, edges, gluedPairs: [] };
 }
 
+// 单图参考分析（供搜索树面板切换单图视图）
+export function analyzeSingleGraph(sc: Scenario, id: string, alpha = 0.5, tau = 4): DomainResult {
+  const g = sc.graphs[id];
+  const total = buildDomainTotal(g);
+  const dfs = dfsFromFree(total);
+  const cycles = findCycles(total, tau, dfs.depthOf);
+  const { scores, diameter, subtreeDepthOf } = scoreEdges(total, dfs, cycles, alpha, tau);
+  scores.sort(sortScores);
+  return { domain: id, graphName: g.name, scores, dfs, cycles, diameter, subtreeDepthOf };
+}
+
 export function computePriorities(sc: Scenario, alpha = 0.5, tau = 4): PriorityResult {
-  // 复合语义：球/位置/控制/血量各逻辑域互不影响，每域独立 DFS（起点=无球，无无球则从首节点）
-  const byDomain = {} as Record<DomainId, DomainResult>;
-  for (const domain of Object.keys(sc.graphs) as DomainId[]) {
-    byDomain[domain] = analyzeGraph(buildDomainTotal(sc.graphs[domain]), alpha, tau, domain);
+  // 【权威】总超图：全部逻辑图粘合 → 一次 DFS → 统一评分排名
+  const total = buildTotalGraph(sc);
+  const dfs = dfsFromFree(total);
+  const cycles = findCycles(total, tau, dfs.depthOf);
+  const { scores } = scoreEdges(total, dfs, cycles, alpha, tau);
+  scores.sort(sortScores);
+  scores.forEach((s, i) => { s.rank = i + 1; });
+
+  // 各逻辑图参考视图（分数对象共享，排序独立）
+  const byDomain: Record<string, DomainResult> = {};
+  for (const [gid, g] of Object.entries(sc.graphs)) {
+    const subset = scores.filter((s) => s.edge.domain === gid).sort(sortScores);
+    byDomain[gid] = {
+      domain: gid,
+      graphName: g.name,
+      scores: subset,
+      dfs,           // 总超图 DFS（单图视图另用 analyzeSingleGraph 按需计算）
+      cycles,
+      diameter: 0,
+      subtreeDepthOf: new Map(),
+    };
   }
 
-  // 合并全部事件，全局排名（冲突裁决依据）
-  const merged = Object.values(byDomain).flatMap((d) => d.scores);
-  merged.sort((a, b) =>
-    b.finalScore - a.finalScore ||
-    b.edge.params.basePriority - a.edge.params.basePriority ||
-    defaultOrderIndex(a.edge.event) - defaultOrderIndex(b.edge.event) ||
-    a.edge.event.localeCompare(b.edge.event, 'zh'));
-  merged.forEach((s, i) => { s.rank = i + 1; });
-
-  return { scores: merged, byDomain, alpha };
+  return { total, dfs, cycles, scores, byDomain, alpha };
 }
 
 // ---------- 5. 参数调整建议 ----------
@@ -337,45 +364,42 @@ export interface Suggestion {
 
 export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
   const out: Suggestion[] = [];
-  const byEvent = new Map<string, EdgeScore>();
-  for (const s of result.scores) if (!byEvent.has(s.edge.event)) byEvent.set(s.edge.event, s);
 
-  // 短环破除：对短环内事件提高冷却/降低结构权重
-  for (const d of Object.values(result.byDomain)) {
-    for (const cyc of d.cycles.shortCycles) {
-      const evs = new Set<string>();
-      for (const e of d.scores) {
-        if (cyc.includes(e.edge.fromName) && cyc.includes(e.edge.toName)) evs.add(e.edge.event);
-      }
-      for (const ev of evs) {
-        out.push({
-          target: `事件「${ev}」（${DOMAIN_NAMES[d.domain]}短环 ${cyc.join('→')} 内）`,
-          kind: '短环破除',
-          advice: `建议提高该事件 cooldown +2 tick，或将其 structWeight 降至 0.5 以下`,
-          expect: '降低陷入短死循环的概率，把状态流量赶入主大循环',
-        });
-      }
+  // 短环破除：对短环内事件提高冷却/降低结构权重（基于权威总超图）
+  for (const cyc of result.cycles.shortCycles) {
+    const evs = new Set<string>();
+    for (const s of result.scores) {
+      if (cyc.includes(s.edge.fromName) && cyc.includes(s.edge.toName)) evs.add(s.edge.event);
+    }
+    for (const ev of evs) {
+      out.push({
+        target: `事件「${ev}」（总超图短环 ${cyc.join('→')} 内）`,
+        kind: '短环破除',
+        advice: `建议提高该事件 cooldown +2 tick，或将其 structWeight 降至 0.5 以下`,
+        expect: '降低陷入短死循环的概率，把状态流量赶入主大循环',
+      });
     }
   }
 
   // 流量引导：主循环上优先级偏低的事件
-  for (const d of Object.values(result.byDomain)) {
-    for (const s of d.scores) {
-      if (s.inMainCycle && s.finalScore < 0.5) {
-        out.push({
-          target: `事件「${s.edge.event}」（${DOMAIN_NAMES[d.domain]}主循环内但优先级偏低）`,
-          kind: '流量引导',
-          advice: `建议将 basePriority 提高 1~2 档（当前 ${s.edge.params.basePriority}）`,
-          expect: '主循环内事件执行更稳定，全局状态停留在大循环中',
-        });
-      }
+  for (const s of result.scores) {
+    if (s.inMainCycle && s.finalScore < 0.5) {
+      out.push({
+        target: `事件「${s.edge.event}」（${sc.graphs[s.edge.domain]?.name ?? s.edge.domain}，主循环内但优先级偏低）`,
+        kind: '流量引导',
+        advice: `建议将 basePriority 提高 1~2 档（当前 ${s.edge.params.basePriority}）`,
+        expect: '主循环内事件执行更稳定，全局状态停留在大循环中',
+      });
     }
   }
 
   // 参数平衡：结合全局平衡参数
   const b = sc.balance;
+  const seenDmg = new Set<string>();
+  const seenDsp = new Set<string>();
   for (const s of result.scores) {
-    if (s.edge.skillKind === 'damage') {
+    if (s.edge.skillKind === 'damage' && !seenDmg.has(s.edge.event)) {
+      seenDmg.add(s.edge.event);
       out.push({
         target: `伤害事件「${s.edge.event}」`,
         kind: '参数平衡',
@@ -383,11 +407,12 @@ export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
         expect: '掉球事件触发频率下降，持球状态更稳定',
       });
     }
-    if (s.edge.skillKind === 'displacement') {
+    if (s.edge.skillKind === 'displacement' && !seenDsp.has(s.edge.event)) {
+      seenDsp.add(s.edge.event);
       out.push({
         target: `位移事件「${s.edge.event}」`,
         kind: '参数平衡',
-        advice: `当前位移基准 ${b.displacement}；位移距离影响位置逻辑图的流转速度，过大会缩短位置状态停留时间`,
+        advice: `当前位移基准 ${b.displacement}m；位移距离影响位置逻辑图的流转速度，过大会缩短位置状态停留时间`,
         expect: '位置状态图节奏与球逻辑图更同步',
       });
     }
@@ -398,12 +423,10 @@ export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
   return out.filter((s) => { const k = s.target + s.kind; if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
-// ---------- 6. 复合（compose：图替换式叠加，非笛卡尔积的显示） ----------
-// 语义：把替换图 B 的副本嵌入宿主图 A 的每个状态点，A 的边保持连接各副本。
-// 复合状态 = (A 状态, B 状态)，两图互不影响。
+// ---------- 6. 复合（compose：图替换式叠加，非笛卡尔积连线） ----------
 export interface CompositePlan {
-  host: DomainId;
-  guest: DomainId;
+  host: string;
+  guest: string;
   hostNodeCount: number;
   guestNodeCount: number;
   guestEdgeCount: number;
@@ -411,7 +434,7 @@ export interface CompositePlan {
   compositeEdgeCount: number; // A 边 × |V_B| + |V_A| × B 边
 }
 
-export function compositeStats(sc: Scenario, host: DomainId, guest: DomainId): CompositePlan {
+export function compositeStats(sc: Scenario, host: string, guest: string): CompositePlan {
   const A = sc.graphs[host];
   const B = sc.graphs[guest];
   const aN = A.nodes.length, bN = B.nodes.length, bE = B.edges.length;
