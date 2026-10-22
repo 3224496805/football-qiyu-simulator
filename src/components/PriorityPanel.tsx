@@ -29,7 +29,7 @@ export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Prop
       <div className="border rounded p-3 bg-teal-50 dark:bg-teal-950/40 text-sm">
         <div className="font-bold text-teal-700 dark:text-teal-300">权威 = 总状态逻辑超图 DFS（{Object.keys(byDomain).length} 张逻辑图已粘合）</div>
         <div className="mt-1 text-xs">
-          根「无球」· 最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size} ·
+          起点（{dfs.rootNames.length} 个）{dfs.rootNames.slice(0, 8).join('、')}{dfs.rootNames.length > 8 ? '…' : ''} · 最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size} ·
           主循环（{cycles.mainCycle.length} 节点）：{cycles.mainCycle.length > 0 ? cycles.mainCycle.slice(0, 24).join('→') + (cycles.mainCycle.length > 24 ? '…' : '') : '（无环）'} ·
           <span className={cycles.shortCycles.length > 0 ? 'text-red-600' : ''}> 短环 {cycles.shortCycles.length} 个</span> ·
           <span className={dfs.unreachable.length > 0 ? 'text-amber-600' : ''}> 不可达 {dfs.unreachable.length} 个</span>

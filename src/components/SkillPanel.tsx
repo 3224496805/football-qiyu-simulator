@@ -10,10 +10,11 @@ interface Props {
 let skSeq = 0;
 
 const KIND_STYLE: Record<SkillKind, string> = {
-  damage: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300',
-  displacement: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+  impact: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300',
   signal: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
   aux: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+  damage: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300',
+  displacement: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
 };
 
 export default function SkillPanel({ scenario, onChange }: Props) {
@@ -24,8 +25,8 @@ export default function SkillPanel({ scenario, onChange }: Props) {
       id: `sk_${Date.now()}_${skSeq++}`,
       name: `新${SKILL_KIND_NAMES[kind]}技能`,
       kind,
-      damage: kind === 'damage' ? 15 : undefined,
-      displacement: kind === 'displacement' ? 12 : undefined,
+      damage: kind === 'impact' ? 15 : undefined,
+      displacement: kind === 'impact' ? 12 : undefined,
       chargeMax: kind === 'signal' ? 100 : undefined,
       effectValue: kind === 'aux' ? 20 : undefined,
       cooldown: kind === 'signal' ? 0 : 3,
@@ -50,17 +51,23 @@ export default function SkillPanel({ scenario, onChange }: Props) {
         <button onClick={() => remove(s.id)} className="text-muted-foreground hover:text-red-600">✕</button>
       </div>
       <div className="grid grid-cols-3 gap-2">
-        {s.kind === 'damage' && (
-          <label>伤害大小
-            <input type="number" className="mt-0.5 w-full border rounded px-2 py-1 bg-background" value={s.damage ?? 0}
-              onChange={(e) => update(s.id, { damage: +e.target.value })} />
-          </label>
+        {s.kind === 'impact' && (
+          <>
+            <label>伤害
+              <input type="number" className="mt-0.5 w-full border rounded px-2 py-1 bg-background" value={s.damage ?? 0}
+                onChange={(e) => update(s.id, { damage: +e.target.value })} />
+            </label>
+            <label>位移（米）
+              <input type="number" step={12} className="mt-0.5 w-full border rounded px-2 py-1 bg-background" value={s.displacement ?? 0}
+                onChange={(e) => update(s.id, { displacement: +e.target.value })} />
+              <span className="text-xs text-muted-foreground">= {+(metersToCells(s.displacement ?? 0)).toFixed(1)} 格（1 格 = 12m）</span>
+            </label>
+          </>
         )}
-        {s.kind === 'displacement' && (
-          <label>位移距离（米）
-            <input type="number" step={12} className="mt-0.5 w-full border rounded px-2 py-1 bg-background" value={s.displacement ?? 0}
-              onChange={(e) => update(s.id, { displacement: +e.target.value })} />
-            <span className="text-xs text-muted-foreground">= {+(metersToCells(s.displacement ?? 0)).toFixed(1)} 格（1 格 = 12m）</span>
+        {(s.kind === 'damage' || s.kind === 'displacement') && (
+          <label>旧版数值
+            <input type="number" className="mt-0.5 w-full border rounded px-2 py-1 bg-background" value={(s.damage ?? s.displacement) ?? 0}
+              onChange={(e) => update(s.id, s.kind === 'damage' ? { damage: +e.target.value } : { displacement: +e.target.value })} />
           </label>
         )}
         {s.kind === 'signal' && (
@@ -96,11 +103,10 @@ export default function SkillPanel({ scenario, onChange }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-bold text-lg">事件库</h3>
-          <p className="text-sm text-muted-foreground">四类事件模板：伤害 / 位移 / 信号（蓄力等）/ 辅助（治疗等）；事件支持主动触发与被动触发（监听其他事件，下一次判定加入队列）。已并入图编辑的事件编辑栏，可就地新建并绑定。</p>
+          <p className="text-sm text-muted-foreground">三类事件模板：冲击（伤害+位移合并）/ 信号（蓄力等）/ 辅助（治疗等）；事件 = 条件 + 执行的状态变化，支持主动触发与被动触发（监听其他事件，下一次判定加入队列）。已并入图编辑的事件编辑栏，可就地新建并绑定；下方可用 Kimi 生成新逻辑图。</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => add('damage')} className="px-3 py-1 border rounded text-sm bg-red-50 hover:bg-red-100 dark:bg-red-950">+ 伤害</button>
-          <button onClick={() => add('displacement')} className="px-3 py-1 border rounded text-sm bg-blue-50 hover:bg-blue-100 dark:bg-blue-950">+ 位移</button>
+          <button onClick={() => add('impact')} className="px-3 py-1 border rounded text-sm bg-red-50 hover:bg-red-100 dark:bg-red-950">+ 冲击（伤害+位移）</button>
           <button onClick={() => add('signal')} className="px-3 py-1 border rounded text-sm bg-amber-50 hover:bg-amber-100 dark:bg-amber-950">+ 信号</button>
           <button onClick={() => add('aux')} className="px-3 py-1 border rounded text-sm bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950">+ 辅助</button>
         </div>

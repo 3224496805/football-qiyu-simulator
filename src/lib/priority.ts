@@ -60,9 +60,11 @@ export function buildTotalGraph(sc: Scenario): TotalGraph {
   return { nodes: [...byName.values()], edges, gluedPairs };
 }
 
-// ---------- 2. DFS 有向搜索树（起点 = 无球） ----------
+// ---------- 2. 多起点 DFS 有向搜索树（默认起点集 = 方案 startState：接入位置/血量等初始状态） ----------
 export interface DfsResult {
-  rootId: string;                        // 起点节点 id
+  rootId: string;                        // 首个起点节点 id（兼容字段）
+  rootIds: string[];                     // 全部起点（初始联合状态各图的起始节点）
+  rootNames: string[];                   // 起点状态名（展示用）
   depthOf: Map<string, number>;          // 节点首次访问的 DFS 树层深
   parentOf: Map<string, string>;         // DFS 树父节点 id
   treeEdgeOf: Map<string, string>;       // 节点 -> 到达它的树边 id
@@ -74,8 +76,12 @@ export interface DfsResult {
   visitOrder: string[];                  // 节点首次访问顺序
 }
 
-export function dfsFromFree(total: TotalGraph, startName = '无球'): DfsResult {
-  const start = total.nodes.find((n) => n.name === startName) ?? total.nodes[0];
+export function dfsFromFree(total: TotalGraph, startNames: string[] = ['无球']): DfsResult {
+  // 多起点：所有同名起点均为根（层深 0），构成初始联合状态的搜索森林
+  const roots = total.nodes.filter((n) => startNames.includes(n.name));
+  const start = roots[0] ?? total.nodes[0];
+  const rootIds = (roots.length > 0 ? roots : [start]).map((n) => n.id);
+  const rootNames = (roots.length > 0 ? roots : [start]).map((n) => n.name);
   const depthOf = new Map<string, number>();
   const parentOf = new Map<string, string>();
   const treeEdgeOf = new Map<string, string>();
@@ -101,10 +107,14 @@ export function dfsFromFree(total: TotalGraph, startName = '无球'): DfsResult 
   // 显式栈迭代 DFS（栈上集合用于识别回边）
   interface Frame { node: string; depth: number; iter: number }
   const onStack = new Set<string>();
-  const stack: Frame[] = [{ node: start.id, depth: 0, iter: 0 }];
-  depthOf.set(start.id, 0);
-  onStack.add(start.id);
-  visitOrder.push(start.id);
+  const stack: Frame[] = [];
+  for (const rid of rootIds) {
+    if (depthOf.has(rid)) continue;
+    depthOf.set(rid, 0);
+    onStack.add(rid);
+    visitOrder.push(rid);
+    stack.push({ node: rid, depth: 0, iter: 0 });
+  }
 
   while (stack.length) {
     const frame = stack[stack.length - 1];
@@ -131,7 +141,7 @@ export function dfsFromFree(total: TotalGraph, startName = '无球'): DfsResult 
 
   const maxDepth = Math.max(0, ...[...depthOf.values()]);
   const unreachable = total.nodes.filter((n) => !depthOf.has(n.id)).map((n) => n.name);
-  return { rootId: start.id, depthOf, parentOf, treeEdgeOf, depthsOfEdge, treeEdgeIds, backEdgeIds, maxDepth, unreachable, visitOrder };
+  return { rootId: start.id, rootIds, rootNames, depthOf, parentOf, treeEdgeOf, depthsOfEdge, treeEdgeIds, backEdgeIds, maxDepth, unreachable, visitOrder };
 }
 
 // ---------- 3. 主循环识别（Tarjan SCC） ----------
@@ -327,10 +337,16 @@ export function analyzeSingleGraph(sc: Scenario, id: string, alpha = 0.5, tau = 
   return { domain: id, graphName: g.name, scores, dfs, cycles, diameter, subtreeDepthOf };
 }
 
+// 方案的多起点集合（DFS 根 = 初始联合状态在各图上的起始状态）
+export function startNamesOf(sc: Scenario): string[] {
+  const names = Object.values(sc.startState ?? {}).filter(Boolean);
+  return names.length > 0 ? names : ['无球'];
+}
+
 export function computePriorities(sc: Scenario, alpha = 0.5, tau = 4): PriorityResult {
-  // 【权威】总超图：全部逻辑图粘合 → 一次 DFS → 统一评分排名
+  // 【权威】总超图：全部逻辑图粘合 → 多起点 DFS → 统一评分排名
   const total = buildTotalGraph(sc);
-  const dfs = dfsFromFree(total);
+  const dfs = dfsFromFree(total, startNamesOf(sc));
   const cycles = findCycles(total, tau, dfs.depthOf);
   const { scores } = scoreEdges(total, dfs, cycles, alpha, tau);
   scores.sort(sortScores);
@@ -426,12 +442,12 @@ export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
   const seenDmg = new Set<string>();
   const seenDsp = new Set<string>();
   for (const s of result.scores) {
-    if (s.edge.skillKind === 'damage' && !seenDmg.has(s.edge.event)) {
+    if ((s.edge.skillKind === 'impact' || s.edge.skillKind === 'damage' || s.edge.skillKind === 'displacement') && !seenDmg.has(s.edge.event)) {
       seenDmg.add(s.edge.event);
       out.push({
-        target: `伤害事件「${s.edge.event}」`,
+        target: `冲击事件「${s.edge.event}」`,
         kind: '参数平衡',
-        advice: `当前全局伤害基准 ${b.damage}、血量上限 ${b.hpMax}、掉球阈值 ${b.hpDropThreshold}；若要减少掉球频率，可降低伤害基准或提高掉球阈值`,
+        advice: `当前全局伤害基准 ${b.damage}、血量上限 ${b.hpMax}、掉球阈值 ${b.hpDropThreshold}、无球回血 ${b.hpRegen ?? 5}/次；默认双方位置状态重合（同格）才能造成伤害。若要减少掉球频率，可降低伤害基准或提高掉球阈值`,
         expect: '掉球事件触发频率下降，持球状态更稳定',
       });
     }

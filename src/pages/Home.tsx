@@ -4,12 +4,9 @@ import EdgeDialog from '@/components/EdgeDialog';
 import PriorityPanel from '@/components/PriorityPanel';
 import SuggestPanel from '@/components/SuggestPanel';
 import SkillPanel from '@/components/SkillPanel';
-import TotalGraphPanel from '@/components/TotalGraphPanel';
-import SearchTreePanel from '@/components/SearchTreePanel';
-import CompositePanel from '@/components/CompositePanel';
-import ProfessionPanel from '@/components/ProfessionPanel';
-import PitchPanel from '@/components/PitchPanel';
 import SimPanel from '@/components/SimPanel';
+import OverviewPanel from '@/components/OverviewPanel';
+import AiGenPanel from '@/components/AiGenPanel';
 import { buildRoster, createDefaultScenario, emptyGraph } from '@/lib/defaultScenario';
 import { computePriorities, suggest } from '@/lib/priority';
 import { deleteScenario, exportScenario, importScenario, listScenarios, loadScenario, newId, saveScenario } from '@/lib/storage';
@@ -24,7 +21,7 @@ function graphColor(id: string, graphs: Scenario['graphs']): string {
   return GRAPH_COLORS[i % GRAPH_COLORS.length];
 }
 
-const TABS = ['图编辑', '位置联合状态', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '事件库', '动态模拟'] as const;
+const TABS = ['图编辑', '总览', '优先级计算', '事件库', '动态模拟'] as const;
 
 export default function Home() {
   const [metas, setMetas] = useState(listScenarios);
@@ -203,7 +200,7 @@ export default function Home() {
               ))}
               <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                 <span>
-                  实体上的状态逻辑图可自由增删改名；{scenario.players.length} 个角色共享角色逻辑图（技能边按职业区分），1 个球独立拥有球路逻辑；跨逻辑图同名状态在总超图中自动粘合，权威优先级 = 总超图 DFS。
+                  实体上的状态逻辑图可自由增删改名；{scenario.players.length} 个角色共享角色逻辑图（技能边按职业区分），1 个球独立拥有球路逻辑；跨逻辑图同名状态在总超图中自动粘合，权威优先级 = 总超图多起点 DFS。
                 </span>
                 {graph && (
                   <span className="flex gap-1 ml-auto">
@@ -212,34 +209,54 @@ export default function Home() {
                   </span>
                 )}
               </div>
+              <div className="flex items-center gap-2 text-xs flex-wrap border-t pt-1">
+                <span className="font-bold text-muted-foreground">DFS 起点（初始联合状态，接入位置/血量）：</span>
+                {graphList.map((g) => (
+                  <label key={g.id} className="flex items-center gap-1">
+                    <span className="text-muted-foreground">{g.name.replace(/（.*）/g, '')}</span>
+                    {g.nodes.length <= 20 ? (
+                      <select className="border rounded px-1 py-0.5 bg-background"
+                        value={scenario.startState?.[g.id] ?? ''}
+                        onChange={(e) => setScenario({ ...scenario, startState: { ...scenario.startState, [g.id]: e.target.value } })}>
+                        <option value="">（不设）</option>
+                        {g.nodes.map((n) => <option key={n.id} value={n.name}>{n.name}</option>)}
+                      </select>
+                    ) : (
+                      <input className="border rounded px-1 py-0.5 w-16 bg-background" placeholder="如 (2,4)"
+                        value={scenario.startState?.[g.id] ?? ''}
+                        onChange={(e) => setScenario({ ...scenario, startState: { ...scenario.startState, [g.id]: e.target.value } })} />
+                    )}
+                  </label>
+                ))}
+              </div>
             </div>
             <div className="flex-1 overflow-auto">
               <div className="p-2 h-full min-w-[920px] min-h-[560px]">
-                <GraphCanvas graph={graph} onChange={updateGraph} onEditEdge={setEditingEdgeId} color={graphColor(domain, scenario.graphs)} />
+                <GraphCanvas graph={graph} graphs={scenario.graphs} onChange={updateGraph} onEditEdge={setEditingEdgeId} color={graphColor(domain, scenario.graphs)} />
               </div>
             </div>
           </div>
         )}
-        {tab === '位置联合状态' && <PitchPanel scenario={scenario} onChange={setScenario} />}
-        {tab === '复合预览' && <CompositePanel scenario={scenario} />}
-        {tab === '总超图' && <TotalGraphPanel scenario={scenario} result={result} />}
-        {tab === 'DFS 搜索树' && <SearchTreePanel scenario={scenario} result={result} alpha={alpha} />}
-        {tab === '优先级计算' && <PriorityPanel result={result} scenario={scenario} alpha={alpha} onAlpha={setAlpha} />}
-        {tab === '参数建议' && (
-          <SuggestPanel scenario={scenario} result={result} suggestions={suggestions}
-            onBalance={(balance) => setScenario({ ...scenario, balance })} />
-        )}
-        {tab === '职业名册' && (
-          <ProfessionPanel scenario={scenario} onChange={setScenario} />
+        {tab === '总览' && <OverviewPanel scenario={scenario} result={result} alpha={alpha} onChange={setScenario} />}
+        {tab === '优先级计算' && (
+          <div className="space-y-4">
+            <PriorityPanel result={result} scenario={scenario} alpha={alpha} onAlpha={setAlpha} />
+            <SuggestPanel scenario={scenario} result={result} suggestions={suggestions}
+              onBalance={(balance) => setScenario({ ...scenario, balance })} />
+          </div>
         )}
         {tab === '动态模拟' && <SimPanel scenario={scenario} result={result} />}
         {tab === '事件库' && (
-          <SkillPanel scenario={scenario} onChange={(skills) => setScenario({ ...scenario, skills })} />
+          <div className="p-4 space-y-4">
+            <SkillPanel scenario={scenario} onChange={(skills) => setScenario({ ...scenario, skills })} />
+            <AiGenPanel scenario={scenario}
+              onAddGraph={(g) => setScenario({ ...scenario, graphs: { ...scenario.graphs, [g.id]: g } })} />
+          </div>
         )}
       </main>
 
       <EdgeDialog edge={editingEdge} fromName={editingFrom} toName={editingTo}
-        skills={scenario.skills} professions={scenario.professions}
+        skills={scenario.skills} professions={scenario.professions} graphs={scenario.graphs}
         showProfessions={graph.owner === 'player'}
         onSave={updateEdge}
         onSkillsChange={(skills) => setScenario({ ...scenario, skills })}

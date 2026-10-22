@@ -42,26 +42,25 @@ export interface SimState {
   stats: SimStats;
 }
 
-// 初始状态：按默认阵型摆位
+// 初始状态：按方案阵型摆位（两队分居两侧），其余图取 startState
 export function initSim(sc: Scenario): SimState {
+  const spotOf = (id: string) => sc.formation?.find((f) => f.id === id);
   const entities: EntityState[] = sc.players.map((p) => {
-    const teamMates = sc.players.filter((x) => x.team === p.team);
-    const idx = teamMates.indexOf(p);
-    const n = teamMates.length;
+    const spot = spotOf(p.id);
     return {
       kind: 'player',
       name: p.name,
       professionId: p.professionId,
       states: {
-        possession: '无球',
-        holding: '射门未激活',
-        position: `(${p.team === 'A' ? 2 : 7},${Math.round(((idx + 0.5) / n) * 9)})`,
-        control: '自由',
-        hp: '血量≥50',
+        possession: sc.startState?.possession ?? '无球',
+        holding: sc.startState?.holding ?? '射门未激活',
+        position: spot ? `(${spot.col},${spot.row})` : (sc.startState?.position ?? '(2,4)'),
+        control: sc.startState?.control ?? '自由',
+        hp: sc.startState?.hp ?? '血量≥50',
       },
     };
   });
-  entities.push({ kind: 'ball', name: '球', states: { ballTrack: '自由球' } });
+  entities.push({ kind: 'ball', name: '球', states: { ballTrack: sc.startState?.ballTrack ?? '自由球' } });
   return {
     entities,
     stats: { tick: 0, fired: {}, suppressed: {}, queued: {}, cycleTrap: {}, log: [], contradiction: [] },
@@ -97,6 +96,13 @@ export function stepSim(
 
   const entities = state.entities.map((ent) => {
     const states = { ...ent.states };
+    // 跨图状态前提：事件要求该实体在另一张图上处于/不处于某状态（条件的一部分）
+    const preOk = (e: { preStates?: { graph: string; state: string; not?: boolean }[] }) =>
+      !(e.preStates ?? []).some((p) => {
+        const cur = states[p.graph];
+        if (cur === undefined) return false; // 该实体无此图，前提视为满足
+        return p.not ? cur === p.state : cur !== p.state;
+      });
     for (const [gid, g] of Object.entries(sc.graphs)) {
       if (g.owner !== ent.kind) continue;
       const curName = states[gid];
@@ -111,6 +117,7 @@ export function stepSim(
       }
       const eligible = out.filter((e) => {
         if (e.trigger === 'passive') return false; // 被动边不走随机触发
+        if (!preOk(e)) return false; // 跨图状态前提
         if (e.professionIds && ent.professionId && !e.professionIds.includes(ent.professionId)) return false;
         return (cds[e.id] ?? 0) <= 0;
       });
@@ -131,6 +138,8 @@ export function stepSim(
         const profOk = !(qe.professionIds && ent.professionId && !qe.professionIds.includes(ent.professionId));
         if (qe.from !== cur.id) {
           log.push({ tick, entity: ent.name, graphId: gid, event: qe.event, from: curName, to: toNm, outcome: 'missed', reason: '被动入队后前提已失效（当前状态不在事件起点）' });
+        } else if (!preOk(qe)) {
+          log.push({ tick, entity: ent.name, graphId: gid, event: qe.event, from: curName, to: toNm, outcome: 'missed', reason: '被动入队后跨图状态前提不符' });
         } else if (!profOk) {
           log.push({ tick, entity: ent.name, graphId: gid, event: qe.event, from: curName, to: toNm, outcome: 'missed', reason: '被动入队后职业前提不符' });
         } else if ((cds[qe.id] ?? 0) > 0) {

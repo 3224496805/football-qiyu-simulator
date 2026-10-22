@@ -35,6 +35,7 @@ export default function SuggestPanel({ scenario, onBalance, result, suggestions 
         {slider('伤害基准', 'damage', 1, 50)}
         {slider('血量上限', 'hpMax', 50, 300)}
         {slider('掉球阈值', 'hpDropThreshold', 5, 100)}
+        {slider('无球回血/次', 'hpRegen', 0, 30)}
         {slider('位移基准距离', 'displacement', 1, 15)}
       </div>
 

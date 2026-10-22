@@ -50,7 +50,7 @@ export default function TotalGraphPanel({ scenario, result }: Props) {
     <div className="p-4 space-y-4">
       <div className="text-sm text-muted-foreground">
         总状态逻辑超图：全部逻辑图的同名状态已粘合（glue），虚线为超边（多实体联合事件）。
-        布局按权威总超图 DFS 层深（根=无球）从左到右展开，节点颜色 = 来源逻辑图。
+        布局按权威总超图 DFS 层深（多起点=初始联合状态）从左到右展开，节点颜色 = 来源逻辑图。
         实体归属：角色逻辑图由 {scenario.players.length} 个角色共享（技能边按职业区分），球路逻辑独立挂球实体。
       </div>
 

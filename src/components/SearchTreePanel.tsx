@@ -66,7 +66,7 @@ export default function SearchTreePanel({ scenario, result, alpha }: Props) {
   const nodeName = (id: string) =>
     scores.find((s) => s.edge.from === id)?.edge.fromName ??
     scores.find((s) => s.edge.to === id)?.edge.toName ??
-    (id === dfs.rootId ? '（根）' : id);
+    (dfs.rootIds.includes(id) ? '（根）' : id);
 
   return (
     <div className="p-4 space-y-4">
@@ -88,7 +88,7 @@ export default function SearchTreePanel({ scenario, result, alpha }: Props) {
         {sel === '__total__'
           ? '权威视图：跨逻辑图同名状态已粘合，DFS 在此总超图上统一生成搜索树，优先级排名以此为准。'
           : `参考视图：单张逻辑图独立的 DFS（${ENTITY_NAMES[scenario.graphs[sel].owner]}），不参与权威排名。`}
-        {' '}DFS 从「{nodeName(dfs.rootId)}」出发 · 最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size}（回边 = 成环证据）
+        {' '}DFS 多起点（{dfs.rootNames.join('、')}）· 最大层深 {dfs.maxDepth} · 树边 {dfs.treeEdgeIds.size} · 回边 {dfs.backEdgeIds.size}（回边 = 成环证据）
         {dfs.unreachable.length > 0 && <> · <span className="text-amber-600">不可达 {dfs.unreachable.length} 个：{dfs.unreachable.slice(0, 12).join('、')}{dfs.unreachable.length > 12 ? '…' : ''}</span></>}
       </div>
 
@@ -177,7 +177,7 @@ export default function SearchTreePanel({ scenario, result, alpha }: Props) {
         <div className="border rounded p-3">
           <h4 className="font-bold mb-2">DFS 统计</h4>
           <ul className="list-disc pl-5 space-y-1 text-xs">
-            <li>起点（根）：{nodeName(dfs.rootId)}</li>
+            <li>起点（根）：{dfs.rootNames.join('、')}</li>
             <li>访问节点 {dfs.visitOrder.length}，最大层深 {dfs.maxDepth}</li>
             <li>树边 {dfs.treeEdgeIds.size} 条，回边 {dfs.backEdgeIds.size} 条（回边构成环）</li>
             <li>主循环（最大 SCC）：{view.cycles.mainCycle.length > 0 ? view.cycles.mainCycle.slice(0, 20).join('→') + (view.cycles.mainCycle.length > 20 ? '…' : '') : '（无环）'}</li>

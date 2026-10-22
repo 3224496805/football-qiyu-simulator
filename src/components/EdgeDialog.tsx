@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { DomainEdge, Profession, SkillKind, SkillTemplate } from '@/types/model';
+import type { DomainEdge, DomainGraph, Profession, SkillKind, SkillTemplate } from '@/types/model';
 import { SKILL_KIND_NAMES } from '@/types/model';
 import { metersToCells } from '@/lib/defaultScenario';
 
@@ -9,13 +9,14 @@ interface Props {
   toName: string;
   skills: SkillTemplate[];
   professions: Profession[];
+  graphs: Record<string, DomainGraph>; // 跨图状态前提的可选范围
   showProfessions: boolean; // 仅角色实体逻辑域可限定职业
   onSave: (edge: DomainEdge) => void;
   onSkillsChange: (skills: SkillTemplate[]) => void; // 事件编辑栏内可直接新建技能模板
   onClose: () => void;
 }
 
-export default function EdgeDialog({ edge, fromName, toName, skills, professions, showProfessions, onSave, onSkillsChange, onClose }: Props) {
+export default function EdgeDialog({ edge, fromName, toName, skills, professions, graphs, showProfessions, onSave, onSkillsChange, onClose }: Props) {
   const [form, setForm] = useState<DomainEdge | null>(edge);
   const [newKind, setNewKind] = useState<SkillKind>('damage');
 
@@ -37,15 +38,15 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
     setP('cooldown', sk.cooldown);
   };
 
-  // 在事件编辑栏内新建技能模板并绑定（技能模板已并入事件编辑）
+  // 在事件编辑栏内新建技能模板并绑定（事件库已并入事件编辑）
   const createSkill = () => {
-    const names: Record<SkillKind, string> = { damage: '新伤害技能', displacement: '新位移技能', signal: '新信号技能', aux: '新辅助技能' };
+    const names: Record<string, string> = { impact: '新冲击技能', signal: '新信号技能', aux: '新辅助技能' };
     const sk: SkillTemplate = {
       id: `sk_${Date.now()}`,
-      name: names[newKind],
+      name: names[newKind] ?? '新技能',
       kind: newKind,
-      damage: newKind === 'damage' ? 15 : undefined,
-      displacement: newKind === 'displacement' ? 12 : undefined,
+      damage: newKind === 'impact' ? 15 : undefined,
+      displacement: newKind === 'impact' ? 12 : undefined,
       chargeMax: newKind === 'signal' ? 100 : undefined,
       effectValue: newKind === 'aux' ? 20 : undefined,
       cooldown: newKind === 'signal' ? 0 : 3,
@@ -58,10 +59,10 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
     setP('cooldown', sk.cooldown);
   };
 
-  // 同步位移距离 ↔ 网格单位：把所选位移技能的格数写入条件
+  // 同步位移距离 ↔ 网格单位：把所选冲击技能的格数写入条件
   const syncGridUnits = () => {
-    if (form.skillKind !== 'displacement') return;
-    const sk = skills.find((s) => s.id === form.skillId) ?? skills.find((s) => s.kind === 'displacement' && s.displacement !== undefined);
+    if (form.skillKind !== 'displacement' && form.skillKind !== 'impact') return;
+    const sk = skills.find((s) => s.id === form.skillId) ?? skills.find((s) => (s.kind === 'displacement' || s.kind === 'impact') && s.displacement !== undefined);
     if (!sk?.displacement) return;
     const cells = +metersToCells(sk.displacement).toFixed(1);
     const tag = `位移 ${sk.displacement}m = ${cells} 格（1 格=12m）`;
@@ -109,6 +110,38 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
           {form.trigger === 'passive' && (form.listenEvents ?? []).length === 0 && (
             <p className="text-xs text-amber-600">尚未配置监听事件：被动事件永远不会入队。</p>
           )}
+        </div>
+
+        <div className="text-sm border rounded p-2 space-y-2 bg-muted/30">
+          <div className="font-medium">跨图状态前提（条件的一部分，全部满足才可触发）</div>
+          {(form.preStates ?? []).map((p, i) => (
+            <div key={i} className="flex gap-1 items-center">
+              <span className="text-xs">在</span>
+              <select className="border rounded px-1 py-0.5 bg-background flex-1"
+                value={p.graph}
+                onChange={(e) => set('preStates', (form.preStates ?? []).map((x, j) => (j === i ? { ...x, graph: e.target.value, state: '' } : x)))}>
+                <option value="">（选逻辑图）</option>
+                {Object.entries(graphs).map(([gid, g]) => <option key={gid} value={gid}>{g.name}</option>)}
+              </select>
+              <select className="border rounded px-1 py-0.5 bg-background flex-1"
+                value={p.state}
+                onChange={(e) => set('preStates', (form.preStates ?? []).map((x, j) => (j === i ? { ...x, state: e.target.value } : x)))}>
+                <option value="">（选状态）</option>
+                {(graphs[p.graph]?.nodes ?? []).map((n) => <option key={n.id} value={n.name}>{n.name}</option>)}
+              </select>
+              <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                <input type="checkbox" checked={!!p.not}
+                  onChange={(e) => set('preStates', (form.preStates ?? []).map((x, j) => (j === i ? { ...x, not: e.target.checked } : x)))} />
+                不处于
+              </label>
+              <button type="button" className="text-muted-foreground hover:text-red-600"
+                onClick={() => set('preStates', (form.preStates ?? []).filter((_, j) => j !== i))}>✕</button>
+            </div>
+          ))}
+          <button type="button"
+            onClick={() => set('preStates', [...(form.preStates ?? []), { graph: '', state: '' }])}
+            className="px-2 py-0.5 border rounded text-xs hover:bg-muted">＋添加前提</button>
+          <p className="text-xs text-muted-foreground">示例：受击的前提可设为「不处于 持球」（持球时无血量事件）；恢复的前提设为「处于 无球」。</p>
         </div>
 
         <label className="block text-sm">
@@ -172,17 +205,17 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
           </select>
           {boundSkill && (
             <div className="text-xs text-muted-foreground">
-              {boundSkill.kind === 'damage' && <>伤害 {boundSkill.damage} · 范围 {boundSkill.range}m</>}
-              {boundSkill.kind === 'displacement' && <>位移 {boundSkill.displacement}m ≈ {+(metersToCells(boundSkill.displacement ?? 0)).toFixed(1)} 格</>}
+              {boundSkill.kind === 'impact' && <>冲击：伤害 {boundSkill.damage} · 位移 {boundSkill.displacement}m ≈ {+(metersToCells(boundSkill.displacement ?? 0)).toFixed(1)} 格 · 范围 {boundSkill.range}m</>}
               {boundSkill.kind === 'signal' && <>信号类：蓄能上限 {boundSkill.chargeMax}（不直接改状态，持续发出信号/充能）</>}
               {boundSkill.kind === 'aux' && <>辅助类：效果值 {boundSkill.effectValue}（治疗/护盾等）</>}
+              {(boundSkill.kind === 'damage' || boundSkill.kind === 'displacement') && <>旧版模板：伤害 {boundSkill.damage} · 位移 {boundSkill.displacement}m</>}
               {' '}· 冷却 {boundSkill.cooldown} tick{boundSkill.note ? ` · ${boundSkill.note}` : ''}
             </div>
           )}
           <div className="flex gap-2 items-center">
             <select className="border rounded px-2 py-1 bg-background flex-1" value={newKind}
               onChange={(e) => setNewKind(e.target.value as SkillKind)}>
-              {(Object.keys(SKILL_KIND_NAMES) as SkillKind[]).map((k) => (
+              {(['impact', 'signal', 'aux'] as const).map((k) => (
                 <option key={k} value={k}>{SKILL_KIND_NAMES[k]}类</option>
               ))}
             </select>
@@ -193,7 +226,7 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
           </div>
         </div>
 
-        {form.skillKind === 'displacement' && (
+        {(form.skillKind === 'displacement' || form.skillKind === 'impact') && (
           <button type="button" onClick={syncGridUnits}
             className="w-full px-3 py-1 border rounded text-xs text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950">
             ⟳ 同步位移距离到网格单位（写入条件，1 格 = 12m）

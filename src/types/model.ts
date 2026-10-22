@@ -20,11 +20,12 @@ export interface StateNode {
   timeLimit?: { ticks: number; timeoutEvent?: string }; // 时限状态：进入 ticks 后自动触发 timeoutEvent 出边；缺省 = 无限状态
 }
 
-export type SkillKind = 'damage' | 'displacement' | 'signal' | 'aux';
+export type SkillKind = 'impact' | 'signal' | 'aux' | 'damage' | 'displacement'; // impact = 位移+伤害合并（冲击）；damage/displacement 为旧版兼容
 
-export const SKILL_KIND_NAMES: Record<SkillKind, string> = {
-  damage: '伤害',
-  displacement: '位移',
+export const SKILL_KIND_NAMES: Record<string, string> = {
+  impact: '冲击',
+  damage: '伤害(旧)',
+  displacement: '位移(旧)',
   signal: '信号',
   aux: '辅助',
 };
@@ -48,6 +49,7 @@ export interface DomainEdge {
   professionIds?: string[]; // 仅限这些职业拥有该事件；空/undefined = 全职业通用
   trigger?: 'active' | 'passive'; // 触发方式：主动触发（默认）/ 被动触发（监听的事件执行后，于下一次判定加入队列）
   listenEvents?: string[];      // passive：监听的事件名列表
+  preStates?: PreState[];       // 跨图状态前提（条件的一部分）：如 位置重合才能造成伤害 / 仅无球时回血
   params: EventParams;
 }
 
@@ -63,13 +65,20 @@ export interface SkillTemplate {
   id: string;
   name: string;
   kind: SkillKind;
-  damage?: number;       // 伤害大小
-  displacement?: number; // 位移距离
+  damage?: number;       // 冲击：伤害大小
+  displacement?: number; // 冲击：位移距离
   chargeMax?: number;    // 信号类：蓄能上限（如蓄力 0~100）
   effectValue?: number;  // 辅助类：效果值（如治疗量/护盾值）
   cooldown: number;
   range?: number;
   note?: string;
+}
+
+// 跨图状态前提：事件触发/判定前，该实体在另一张逻辑图上必须处于（或不处于）某状态
+export interface PreState {
+  graph: string;   // 逻辑图 id
+  state: string;   // 状态名
+  not?: boolean;   // true = 必须不处于该状态
 }
 
 export interface Profession {
@@ -89,6 +98,7 @@ export interface BalanceParams {
   damage: number;           // 全局伤害基准
   hpMax: number;            // 血量上限
   hpDropThreshold: number;  // 掉球血量阈值
+  hpRegen: number;          // 无球时每次回血事件的固定回复量
   displacement: number;     // 位移基准距离（米）
 }
 
@@ -102,6 +112,7 @@ export interface Scenario {
   professions: Profession[];
   players: PlayerSpec[];    // 全体球员名册（两队），长度 = playersPerTeam × 2
   graphs: Record<DomainId, DomainGraph>; // 实体上的状态逻辑图（可自由增删）
+  startState?: Record<string, string>;   // DFS 多起点：逻辑图 id -> 起始状态名（接入位置/血量等初始状态）
   formation?: FormationSpot[]; // 多人位置联合状态的当前落点（球场视图，可选）
   skills: SkillTemplate[];
   balance: BalanceParams;
