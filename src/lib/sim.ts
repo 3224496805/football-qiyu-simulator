@@ -16,6 +16,7 @@ export interface EntityState {
   professionId?: string;
   states: Record<string, string>; // graphId -> 状态名（position 图 = 3×3 区域名）
   spot?: { col: number; row: number }; // 底层精确格子坐标（区域内移动不改逻辑状态，只改这里）
+  hpValue?: number; // 血量子状态（数值）：血量图是阈值复合状态，事件更新数值后按阈值派生状态
 }
 
 export interface SimEvent {
@@ -55,6 +56,7 @@ export function initSim(sc: Scenario): SimState {
       name: p.name,
       professionId: p.professionId,
       spot: spot ? { col: spot.col, row: spot.row } : undefined,
+      hpValue: sc.balance.hpMax, // 血量子状态初值 = 满血
       states: {
         possession: sc.startState?.possession ?? '无球',
         holding: sc.startState?.holding ?? '射门未激活',
@@ -98,6 +100,8 @@ export function stepSim(
 
   // 冲击命中队列：位置重合（同格）时对敌队造成的伤害，实体循环结束后统一结算
   const hits: Array<{ name: string; by: string; dmg: number }> = [];
+  // 血量数值写回队列：血量图事件更新血量子状态（数值），循环结束后统一写回
+  const hpWrites: Array<{ name: string; hp: number }> = [];
   const teamOf = (name: string) => sc.players.find((p) => p.name === name)?.team;
   const clamp = (v: number) => Math.max(0, Math.min(8, v));
 
@@ -206,6 +210,23 @@ export function stepSim(
           newSpot = { col: near.spot.col, row: near.spot.row };
         }
       }
+      // ---- 血量图：阈值复合状态 = 内部血量子状态（数值）；事件更新数值，状态按阈值派生 ----
+      if (ent.kind === 'player' && gid === 'hp') {
+        const hpMax = sc.balance.hpMax;
+        const regen = sc.balance.hpRegen ?? 5;
+        let hp = ent.hpValue ?? hpMax;
+        if (win.event === '恢复' && hp < 50) {
+          // 复合状态退出条件不满足：数值未回到阈值，本次恢复无效（不计执行/冷却/级联）
+          log.push({ tick, entity: ent.name, graphId: gid, event: '恢复', from: curName, to: toName, outcome: 'missed', reason: `血量子状态=${hp} 未回到 50，退出复合状态条件不满足` });
+          continue;
+        }
+        const skDmg = win.skillId ? sc.skills.find((s) => s.id === win.skillId)?.damage ?? 0 : 0;
+        if (win.event === '受击') hp = Math.max(0, hp - (skDmg > 0 ? skDmg : sc.balance.damage));
+        else if (win.event === '回血') hp = Math.min(hpMax, hp + regen);
+        else if (win.event === '恢复') hp = Math.max(hp, 50);
+        hpWrites.push({ name: ent.name, hp });
+        toName = hp < 50 ? '血量<50' : '血量≥50'; // 内部更新可能跨越阈值 = 退出/进入复合状态
+      }
       states[gid] = toName;
       // 冲击伤害判定：默认双方位置状态重合（同一格）才能对敌队造成伤害
       const winSkill = win.skillId ? sc.skills.find((s) => s.id === win.skillId) : undefined;
@@ -242,21 +263,30 @@ export function stepSim(
     return { ...ent, states, spot: newSpot ?? ent.spot };
   });
 
-  // 冲击伤害结算：同格敌队玩家血量状态跌落（阈值状态机；数值加减血见平衡面板建议）
+  // 血量数值写回（血量图事件产生的内部更新）
+  for (const w of hpWrites) {
+    const t = entities.find((x) => x.name === w.name);
+    if (t) t.hpValue = w.hp;
+  }
+
+  // 冲击伤害结算：同格敌队玩家扣减血量子状态（数值），按阈值派生复合状态
   for (const h of hits) {
     const target = entities.find((x) => x.name === h.name);
     if (!target?.states.hp) continue;
+    const hpMax = sc.balance.hpMax;
+    const hp = Math.max(0, (target.hpValue ?? hpMax) - h.dmg);
+    target.hpValue = hp;
     const fromHp = target.states.hp;
+    const toHp = hp < 50 ? '血量<50' : '血量≥50';
+    target.states.hp = toHp;
     log.push({
-      tick, entity: h.name, graphId: 'hp', event: '受击', from: fromHp,
-      to: fromHp === '血量<50' ? '血量<50' : '血量<50',
+      tick, entity: h.name, graphId: 'hp', event: '受击', from: fromHp, to: toHp,
       outcome: 'executed',
-      reason: `与 ${h.by} 位置重合（同一格）触发冲击伤害 ${h.dmg}${fromHp === '血量<50' ? '（血量进一步扣减）' : ''}`,
+      reason: `与 ${h.by} 位置重合（同一格）触发冲击伤害 ${h.dmg}，血量子状态 ${hp}/${hpMax}${
+        hp < sc.balance.hpDropThreshold ? '（低于掉球阈值，掉球事件由球权逻辑裁决）'
+        : toHp === '血量<50' && fromHp === toHp ? '（复合状态内部扣减，不退出）' : ''}`,
     });
-    if (fromHp !== '血量<50') {
-      target.states.hp = '血量<50';
-      fired['受击'] = (fired['受击'] ?? 0) + 1;
-    }
+    fired['受击'] = (fired['受击'] ?? 0) + 1;
   }
 
   // 短环滞留检测：实体在任一图内连续 K tick 于少于 tau 个状态间打转

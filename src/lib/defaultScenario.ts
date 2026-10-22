@@ -188,18 +188,23 @@ function controlGraph(): DomainGraph {
   ]);
 }
 
-// ---------- 血量逻辑（挂角色）：血量 1-100 数值；持球时无血量事件，无球时触发固定回血 ----------
+// ---------- 血量逻辑（挂角色）：阈值复合状态 + 内部血量子状态（数值） ----------
+// 血量≥50 / 血量<50 是阈值复合状态：内部各有一个血量子状态（数值），
+// 受击/回血是复合状态「内部」的数值更新事件（self-loop，不退出复合状态）；
+// 只有数值跨回阈值才经「恢复」退出复合状态。持球时无血量事件，无球才触发回血。
 function hpGraph(): DomainGraph {
-  return makeGraph('hp', 'player', '血量逻辑', [
-    { name: '血量≥50', x: 200, y: 260, note: '健康：血量数值 1-100，阈值状态节点' },
-    { name: '血量<50', x: 520, y: 260, note: '危险：低于掉球阈值时级联触发掉球（血量→球权→球路）' },
+  return makeGraph('hp', 'player', '血量逻辑（阈值复合）', [
+    { name: '血量≥50', x: 200, y: 140, note: '阈值复合状态：内部血量子状态（数值 50~100），数值更新不退出状态' },
+    { name: '血量<50', x: 520, y: 330, note: '阈值复合状态：内部血量子状态（数值 0~49）；回血是其内部更新事件，数值回到 ≥50 才经「恢复」退出' },
   ], [
-    { event: '受击', from: '血量≥50', to: '血量<50', condition: '【前提】双方位置状态重合（同一网格格）才能造成伤害；血量扣减后 <50', skillKind: 'impact', affectsOthers: true, basePriority: 2,
+    { event: '受击', from: '血量≥50', to: '血量<50', condition: '【前提】双方位置状态重合（同一格）才能造成伤害；数值扣减后 <50（跨阈值进入复合状态）', skillKind: 'impact', affectsOthers: true, basePriority: 2,
       preStates: [{ graph: 'possession', state: '持球', not: true }] },
-    { event: '受击', from: '血量<50', to: '血量<50', condition: '【前提】双方位置状态重合才能造成伤害；血量进一步扣减（仍 <50）', skillKind: 'impact', affectsOthers: true, basePriority: 2,
+    { event: '受击', from: '血量<50', to: '血量<50', condition: '复合状态内部更新：数值进一步扣减，仍 <50（不退出复合状态）', skillKind: 'impact', affectsOthers: true, basePriority: 2,
       preStates: [{ graph: 'possession', state: '持球', not: true }] },
-    { event: '恢复', from: '血量<50', to: '血量≥50', condition: '【被动】无球状态下触发回血事件：每次执行固定回复少量血量（全局参数 hpRegen），回到 ≥50；持球时无血量事件', skillKind: 'aux', skillId: 'sk_aux_1', basePriority: 1,
+    { event: '回血', from: '血量<50', to: '血量<50', condition: '【复合内部】无球状态下每次判定固定回复少量血量（全局参数 hpRegen），数值仍 <50 时不退出复合状态', skillKind: 'aux', skillId: 'sk_aux_1', basePriority: 1,
       preStates: [{ graph: 'possession', state: '无球' }] },
+    { event: '恢复', from: '血量<50', to: '血量≥50', condition: '【被动】回血累积使数值跨回 ≥50：退出复合状态（监听回血，于下一次判定执行）', skillKind: 'aux', skillId: 'sk_aux_1', basePriority: 1,
+      trigger: 'passive', listenEvents: ['回血'] },
   ]);
 }
 
@@ -292,7 +297,7 @@ export function createDefaultScenario(): Scenario {
   const players = buildRoster(3, defaultProfessions);
   return {
     id: newId(),
-    version: 9,
+    version: 10,
     name: '示例：3v3 标准赛',
     playersPerTeam: 3,
     professions: defaultProfessions.map((p) => ({ ...p })),

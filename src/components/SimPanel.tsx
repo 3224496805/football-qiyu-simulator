@@ -78,6 +78,14 @@ export default function SimPanel({ scenario, result }: Props) {
                   <span className="font-medium">{nm}</span>
                 </div>
               ))}
+              {ent.hpValue !== undefined && (
+                <div className="flex justify-between gap-2 border-t pt-0.5 mt-0.5">
+                  <span className="text-muted-foreground">血量子状态</span>
+                  <span className={`font-medium ${ent.hpValue < 50 ? 'text-red-600' : ''}`}>
+                    {ent.hpValue}/{scenario.balance.hpMax}{ent.hpValue < scenario.balance.hpDropThreshold ? ' 🪫掉球线' : ent.hpValue < 50 ? ' ⚠️' : ''}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
         </div>
