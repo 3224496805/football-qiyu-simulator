@@ -33,6 +33,7 @@ export default function EventEditor2({ open, initial, sc, onSave, onClose }: Pro
     const cleaned: QiyuEvent = {
       ...draft,
       name: draft.name.trim(),
+      group: draft.group?.trim() || undefined,
       // 清掉空行：没填完整的行直接丢弃
       preStates: draft.preStates.filter((p) => p.dimension && p.state.trim()),
       effects: draft.effects.filter((f) => f.dimension && f.from.trim() && f.to.trim()),
@@ -83,6 +84,21 @@ export default function EventEditor2({ open, initial, sc, onSave, onClose }: Pro
             主动 = 玩家操作从客户端发出；被动 = 检测到状态变化后触发（千星沙箱的「当……时」）。
             每个实体只能改自己的状态：想让球或对方球员跟着动，请另建一条「被动监听本事件」的事件。
           </p>
+
+          {/* 复合组名：跨实体的两半合成一条复合事件 */}
+          <label className="block">
+            <span className="text-xs text-muted-foreground">
+              复合组名（可选）：和别的事件填同一个名字，就在事件库里合并成一条「复合事件」，优先级也按合并结果计算。
+              例：角色的「拿球」和球的「球被拿」都填「拿球」。
+            </span>
+            <input value={draft.group ?? ''} onChange={(e) => set('group', e.target.value || undefined)}
+              list="qiyu-groups" className="w-full border rounded px-2 py-1 bg-background" placeholder="不填 = 独立事件" />
+            <datalist id="qiyu-groups">
+              {[...new Set(sc.events.map((e) => e.group?.trim()).filter((g): g is string => !!g))].map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+          </label>
 
           {/* 监听（仅被动） */}
           {draft.trigger === '被动' && (

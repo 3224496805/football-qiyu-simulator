@@ -164,6 +164,7 @@ export function parseAiJson(sc: Scenario2, text: string): AiImportResult {
       basePriority: asNum(re.basePriority, 1),
       cooldown: Math.max(0, Math.round(asNum(re.cooldown, 0))),
       professions,
+      group: asStr(re.group) || undefined, // 复合组名：同名的跨实体事件合并成一条复合事件
     });
   }
 

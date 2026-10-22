@@ -122,8 +122,7 @@ export default function DimensionPanel2({ sc, onChange }: Props) {
               ＋添加
             </button>
           </div>
-          {sc.dimensions.filter((d) => d.owner === owner).map((dim) => (
-            <div key={dim.id} className="border-t">
+          {sc.dimensions.filter((d) => d.owner === owner).map((dim) => (            <div key={dim.id} className="border-t">
               <div className="flex items-center gap-1 px-2 py-1.5 cursor-pointer hover:bg-muted/50"
                 onClick={() => setOpenDim(openDim === dim.id ? null : dim.id)}>
                 <span className="text-sm font-medium">{dim.name}</span>
@@ -177,6 +176,29 @@ export default function DimensionPanel2({ sc, onChange }: Props) {
           )}
         </div>
       ))}
+
+      {/* 平衡参数：全局数值，模拟器和事件数值都从这里取 */}
+      <div className="border rounded-lg">
+        <div className="px-2 py-1.5 bg-muted/50 font-bold text-xs">平衡参数</div>
+        <div className="p-2 grid grid-cols-2 gap-2">
+          {([
+            ['damage', '伤害基准', '无特殊说明时一次扣血的默认值'],
+            ['hpMax', '血量上限', '角色开局和回血的上限'],
+            ['attackRange', '攻击距离（格）', '冲击类技能能打到多远的持球者'],
+            ['shootRange', '射门距离（格）', '离球门多近才会进入射门待命'],
+          ] as const).map(([key, label, tip]) => (
+            <label key={key} className="text-xs space-y-0.5" title={tip}>
+              <div className="text-muted-foreground">{label}</div>
+              <input type="number" min={0} value={sc.balance[key]}
+                onChange={(e) => mutate((d) => { d.balance[key] = Math.max(0, Number(e.target.value) || 0); })}
+                className="w-full border rounded px-1.5 py-1 bg-background" />
+            </label>
+          ))}
+        </div>
+        <p className="px-2 pb-2 text-[10px] text-muted-foreground">
+          攻击/射门距离按格数算（斜着相邻算 1 格）；改完去模拟页会自动重置重新开始。
+        </p>
+      </div>
     </div>
   );
 }

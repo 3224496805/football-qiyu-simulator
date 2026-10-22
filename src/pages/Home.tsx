@@ -386,7 +386,7 @@ export default function Home() {
       )}
 
       {view === 'priority' && (
-        <div className="flex-1 overflow-auto"><PriorityPanel2 sc={scenario} /></div>
+        <div className="flex-1 overflow-auto"><PriorityPanel2 sc={scenario} onChange={setScenario} /></div>
       )}
       {view === 'sim' && (
         <div className="flex-1 overflow-hidden"><SimPanel2 sc={scenario} /></div>

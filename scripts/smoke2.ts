@@ -1,5 +1,5 @@
-// v15.4 冒烟测试：精简版默认方案（球门实体）→ 派生图
-// 验证：20 条事件能正确派生各维度逻辑图和总超图；只有 2 条"故意留的"提醒（掉球/打断监听待重构的受击）
+// v16.0 冒烟测试：默认方案（四方向移动 + 冲击 + 受击链接通）→ 派生图
+// 验证：25 条事件能正确派生各维度逻辑图和总超图；体检提醒 0 条；冲击是纯数值事件
 import { createDefaultScenario2 } from '../src/lib/defaultScenario2';
 import { buildDimensionGraph, buildTotalGraph, collectIssues } from '../src/lib/derive2';
 
@@ -12,7 +12,7 @@ const issues = collectIssues(sc);
 console.log(`体检提醒 ${issues.warnings.length} 条；纯数值事件 ${issues.pureNumeric.length} 条`);
 for (const w of issues.warnings) console.log('  ⚠', w);
 
-const expectEdges: Record<string, number> = { 球权: 4, 射门: 11, 位置: 30, 姿态: 0, 血量: 0, 球路: 8, 球门: 5 };
+const expectEdges: Record<string, number> = { 球权: 4, 射门: 8, 位置: 30, 姿态: 1, 血量: 1, 球路: 8, 球门: 5 };
 let totalEdges = 0;
 for (const d of sc.dimensions) {
   const g = buildDimensionGraph(sc, d.id);
@@ -28,12 +28,12 @@ const total = buildTotalGraph(sc);
 console.log(`总超图：${total.nodes.length} 状态 · ${total.edges.length} 条变化`);
 
 const expect = (cond: boolean, msg: string) => { if (!cond) { console.error('❌ ' + msg); process.exit(1); } };
-expect(sc.events.length === 20, `默认事件应为 20 条，实际 ${sc.events.length}`);
+expect(sc.events.length === 25, `默认事件应为 25 条，实际 ${sc.events.length}`);
 expect(sc.dimensions.length === 7, `应有 7 个维度（含球门），实际 ${sc.dimensions.length}`);
-expect(issues.warnings.length === 2, `应只有 2 条提醒（掉球/打断监听受击），实际 ${issues.warnings.length}`);
-expect(issues.pureNumeric.length === 0, '不应有纯数值事件');
+expect(issues.warnings.length === 0, `不应有体检提醒，实际 ${issues.warnings.length} 条`);
+expect(issues.pureNumeric.length === 1 && issues.pureNumeric[0].name === '冲击', '冲击应是唯一的纯数值事件');
 expect(total.edges.length === totalEdges, `总超图边数 ${total.edges.length} 应等于各维度边数之和 ${totalEdges}`);
-expect(total.edges.length === 58, `总超图应有 58 条变化，实际 ${total.edges.length}`);
+expect(total.edges.length === 57, `总超图应有 57 条变化，实际 ${total.edges.length}`);
 expect(total.nodes.length === 27, `总超图应有 27 个状态，实际 ${total.nodes.length}`);
 expect(total.nodes.filter((n) => n.isStart).length === 7, '总超图应有 7 个起始状态');
 console.log('✅ 全部断言通过');

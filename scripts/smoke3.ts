@@ -21,9 +21,9 @@ const r2 = createEventForLink(sc, posDim.id, '禁区', '本方-中', '回防');
 expect(r2.ok && r2.sc.events.some((e) => e.name === '回防' && e.owner === 'player' && e.effects.length === 1), '连线新建事件「回防」（归属角色）');
 expect(!createEventForLink(sc, posDim.id, '禁区', '本方-中', '').ok, '空事件名被拒绝');
 
-const move = sc.events.find((e) => e.name === '移动')!;
+const move = sc.events.find((e) => e.name === '前进')!;
 const r3 = addEffectToEvent(sc, move.id, posDim.id, '禁区', '本方-中');
-expect(r3.ok && r3.sc.events.find((e) => e.id === move.id)!.effects.length === move.effects.length + 1, '连线挂到已有事件「移动」');
+expect(r3.ok && r3.sc.events.find((e) => e.id === move.id)!.effects.length === move.effects.length + 1, '连线挂到已有事件「前进」');
 expect(r3.ok && !addEffectToEvent(r3.sc, move.id, posDim.id, '禁区', '本方-中').ok, '重复变化被拒绝');
 
 const ballEvent = sc.events.find((e) => e.name === '传出')!;

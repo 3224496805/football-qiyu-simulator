@@ -49,6 +49,7 @@ export default function AiGenPanel2({ sc, onImport }: Props) {
    "numeric":[{"kind":"${NUMERIC_KINDS.join('|')}","value":10}],     // 数值效果，可省略
    "affectsOthers":false,                               // 数值效果是否作用于对方（如扣对方的血）
    "condition":"文字条件（距离/按键/数值门槛等）","note":"设计说明",
+   "group":"复合组名",                                    // 可省略：跨实体的一条完整动作（如角色的"拿球"+球的"球被拿"）填同一个组名，合并成一条复合事件
    "basePriority":1,"cooldown":0,"professions":["职业名"]}]}
 
 【硬性要求】

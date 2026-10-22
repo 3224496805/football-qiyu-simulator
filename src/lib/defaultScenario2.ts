@@ -1,12 +1,12 @@
-// 默认示例方案 v15.2：3v3 标准赛（按用户指示精简 + 球门实体）
+// 默认示例方案 v16：3v3 标准赛（移动四方向 + 冲击技能 + 受击/掉球链接通）
 //
 // 本次调整（用户原话落地）：
-//   1）所有和球无关的被动事件、主动技能先删掉（受击/被打断/状态结束/回血/恢复，
-//      冲撞抢截/肘击/飞铲/射门爆发/疾跑突进/侧身闪避），用户晚些自己重构；
-//      「掉球」「打断」因后续要挂回受击体系，暂时保留（监听着不存在的「受击」，体检会提醒）。
-//   2）蓄力事件 = 在「射门激活」状态下先进入「蓄力」状态；
-//      射门事件 = 蓄力状态结束后把球传给球门实体。
-//   3）新增球门实体：拿满三次球，就从任意状态进入「结算」状态。
+//   1）「移动」拆成前进/后退/左移/右移四条主动事件，每条固定走 1 格，冷却与检测同频（1 拍）；
+//   2）新增通用技能「冲击」：位移到持球者所在格 + 造成伤害（作用于对方），
+//      前提是两人距离 ≤ 攻击距离参数（默认 2 格，可在维度页底部调）；
+//   3）受击链接通：「受击」（血量≥50→血量<50）→ 监听它的「掉球」（姿态自由→受控 + 球权持球→无球）
+//      和「打断」（蓄力→未持球）；球侧由「球变自由」（监听掉球）接管。
+//   模拟器现在有真实格子坐标（9×9）：拿球距离、攻击距离、射门距离都是真实判定。
 //
 // 铁律不变：一条事件只属于一个实体，只能改自己维度的状态；跨实体联动 = 被动监听信号。
 import type { Dimension, PlayerSpec, Profession, QiyuEvent, Scenario2 } from '@/types/model2';
@@ -42,6 +42,7 @@ interface EvDef {
   basePriority?: number;
   cooldown?: number;
   professions?: string[];
+  group?: string;
 }
 
 const ev = (d: EvDef): QiyuEvent => ({
@@ -59,6 +60,7 @@ const ev = (d: EvDef): QiyuEvent => ({
   basePriority: d.basePriority ?? 1,
   cooldown: d.cooldown ?? 0,
   professions: d.professions ?? [],
+  group: d.group,
 });
 
 export const defaultProfessions: Profession[] = [
@@ -89,19 +91,15 @@ function positionStates(): string[] {
   return out;
 }
 
-// 「移动」：相邻区域双向互通，共 24 条状态变化
-function moveEffects(dimId: string): QiyuEvent['effects'] {
+// 「移动」四方向：每条只覆盖该方向上的区域边界跨越（每方向 6 条状态变化）
+// 同一区域内移动只是底层格子坐标变化，不改变逻辑状态（模拟器里按格走）
+function dirEffects(dimId: string, dx: number, dy: number): QiyuEvent['effects'] {
   const out: QiyuEvent['effects'] = [];
   for (let zy = 0; zy < 3; zy++) {
     for (let zx = 0; zx < 3; zx++) {
-      if (zx + 1 < 3) {
-        out.push({ dimension: dimId, from: zoneName(zx, zy), to: zoneName(zx + 1, zy) });
-        out.push({ dimension: dimId, from: zoneName(zx + 1, zy), to: zoneName(zx, zy) });
-      }
-      if (zy + 1 < 3) {
-        out.push({ dimension: dimId, from: zoneName(zx, zy), to: zoneName(zx, zy + 1) });
-        out.push({ dimension: dimId, from: zoneName(zx, zy + 1), to: zoneName(zx, zy) });
-      }
+      const nx = zx + dx, ny = zy + dy;
+      if (nx < 0 || nx > 2 || ny < 0 || ny > 2) continue;
+      out.push({ dimension: dimId, from: zoneName(zx, zy), to: zoneName(nx, ny) });
     }
   }
   return out;
@@ -123,39 +121,74 @@ export function createDefaultScenario2(): Scenario2 {
     dim('球权', 'player', ['无球', '持球'], '角色当前是否控制球'),
     dim('射门', 'player', ['未持球', '射门未激活', '射门激活', '蓄力'], '持球期间叠加的射门状态机（按新定义：激活→蓄力→出脚）'),
     dim('位置', 'player', positionStates(), '3×3 区域状态；同区域内移动只是底层坐标变化，不产生事件'),
-    dim('姿态', 'player', ['自由', '受控'], '（事件已删，等你晚些重构）'),
-    dim('血量', 'player', ['血量≥50', '血量<50'], '（事件已删，等你晚些重构）'),
+    dim('姿态', 'player', ['自由', '受控'], '被冲击命中掉球后进入受控；回到自由的出口事件等你设计'),
+    dim('血量', 'player', ['血量≥50', '血量<50'], '阈值状态：受击跌破 50；状态变化由模拟器按真实血量数值判定'),
     dim('球路', 'ball', ['球被持有', '传向队友', '自由球', '飞向球门'], '球自身的运动状态；「飞向球门」是射门后的新状态'),
     dim('球门', 'goal', ['等待', '进1球', '进2球', '结算'], '球门实体：拿满三次球就进入结算（从任意状态）'),
   ];
   const D = Object.fromEntries(dimensions.map((d) => [d.name, d.id]));
-  const P = D['球权'], S = D['射门'], W = D['位置'], B = D['球路'], G = D['球门'];
+  const P = D['球权'], S = D['射门'], W = D['位置'], ZI = D['姿态'], H = D['血量'], B = D['球路'], G = D['球门'];
 
   const events: QiyuEvent[] = [
     // ========== 角色 · 主动（玩家操作从客户端发出） ==========
+    // 移动四方向：每条固定走 1 格，冷却 1 拍（与检测同频）；区域内移动只改格子坐标
     ev({
-      name: '移动', owner: 'player', trigger: '主动',
-      condition: '方向输入导致的跨区移动（同一区域内移动只是底层坐标变化，不产生事件）',
-      effects: moveEffects(W),
-      note: '一条事件覆盖 3×3 区域间的全部相邻双向移动（24 条状态变化）',
+      name: '前进', owner: 'player', trigger: '主动', cooldown: 1, basePriority: 5,
+      condition: '按住方向键（朝球门一侧）；每拍最多 1 格，与检测同频',
+      effects: dirEffects(W, 1, 0),
+      numeric: [{ kind: '位移', value: 12 }],
+      note: '固定 1 格（12m）；跨过区域边界时才产生逻辑状态变化',
+    }),
+    ev({
+      name: '后退', owner: 'player', trigger: '主动', cooldown: 1, basePriority: 5,
+      condition: '按住方向键（背朝球门）；每拍最多 1 格',
+      effects: dirEffects(W, -1, 0),
+      numeric: [{ kind: '位移', value: 12 }],
+    }),
+    ev({
+      name: '左移', owner: 'player', trigger: '主动', cooldown: 1, basePriority: 5,
+      condition: '按住方向键（左侧）；每拍最多 1 格',
+      effects: dirEffects(W, 0, -1),
+      numeric: [{ kind: '位移', value: 12 }],
+    }),
+    ev({
+      name: '右移', owner: 'player', trigger: '主动', cooldown: 1, basePriority: 5,
+      condition: '按住方向键（右侧）；每拍最多 1 格',
+      effects: dirEffects(W, 0, 1),
+      numeric: [{ kind: '位移', value: 12 }],
     }),
     ev({
       name: '冲刺', owner: 'player', trigger: '主动',
       condition: '冲刺键 且 体力 > 0（向进攻方向跨 1 区 ≈ 3 格）',
       effects: forwardEffects(W),
+      numeric: [{ kind: '位移', value: 36 }],
+    }),
+    ev({
+      name: '冲击', owner: 'player', trigger: '主动', basePriority: 6, cooldown: 3,
+      preStates: [
+        { dimension: P, state: '无球' },
+        { dimension: B, state: '球被持有' },
+      ],
+      condition: '与持球者的距离 ≤ 攻击距离参数（默认 2 格，维度页底部可调）',
+      effects: [],
+      numeric: [{ kind: '位移', value: 24 }, { kind: '扣血', value: 15 }],
+      affectsOthers: true,
+      note: '通用技能：冲到持球者所在格并造成伤害（作用于对方；目标就是持球的对家）。位置变化是"动态位移"——目标在哪就冲到哪，图上看不到固定的位置边',
     }),
     ev({
       name: '拿球', owner: 'player', trigger: '主动', basePriority: 3,
+      group: '拿球',
       preStates: [
         { dimension: B, state: '球被持有', not: true },
         { dimension: B, state: '飞向球门', not: true },
       ],
-      condition: '与球距离 ≤ 2 格',
+      condition: '与球距离 ≤ 2 格（模拟器按真实格子判定）',
       effects: [{ dimension: P, from: '无球', to: '持球' }],
       note: '前提：球没被任何人拿着、也不在飞行中（只能拿「传向队友」或「自由球」）；球那边的「球被拿」被动监听到本事件后才改球的状态',
     }),
     ev({
       name: '传球', owner: 'player', trigger: '主动', basePriority: 7,
+      group: '传球',
       preStates: [{ dimension: P, state: '持球' }],
       condition: '按下传球键，选定队友后传出（信号类技能·传球引导）',
       effects: [
@@ -176,7 +209,31 @@ export function createDefaultScenario2(): Scenario2 {
 
     // ========== 角色 · 被动（检测到状态变化后触发） ==========
     ev({
+      name: '受击', owner: 'player', trigger: '被动', basePriority: 6,
+      condition: '血量数值跌破 50（持续检测；血量维度的状态变化由模拟器按真实血量数值判定）',
+      effects: [{ dimension: H, from: '血量≥50', to: '血量<50' }],
+      note: '阈值事件：血量数值跌破 50 时把血量状态切过去；「掉球」「打断」都在监听它',
+    }),
+    ev({
+      name: '掉球', owner: 'player', trigger: '被动', listen: ['受击'], basePriority: 6,
+      group: '掉球',
+      condition: '受击后血量跌破 50（由监听「受击」保证）',
+      effects: [
+        { dimension: ZI, from: '自由', to: '受控' },
+        { dimension: P, from: '持球', to: '无球' },
+      ],
+      note: '执行落在姿态和球权两个维度：被打后即受控又丢球；球侧由「球变自由」（监听本事件）接管',
+    }),
+    ev({
+      name: '打断', owner: 'player', trigger: '被动', listen: ['受击'], basePriority: 6,
+      preStates: [{ dimension: S, state: '蓄力' }],
+      condition: '蓄力中被受击命中（唯一退出蓄力的方式）',
+      effects: [{ dimension: S, from: '蓄力', to: '未持球' }],
+      note: '监听「受击」：蓄力中挨打会被打回未持球',
+    }),
+    ev({
       name: '射门', owner: 'player', trigger: '被动', basePriority: 7,
+      group: '射门',
       preStates: [{ dimension: S, state: '蓄力' }],
       condition: '蓄力状态结束（蓄能满或松开射门键），持续检测；前提：必须正处于「蓄力」状态',
       effects: [
@@ -186,53 +243,38 @@ export function createDefaultScenario2(): Scenario2 {
       note: '按新定义：蓄力结束后出脚，把球传给球门实体；前提必须处于蓄力状态，否则光凭"持球"变化就会误触发；球由「飞向球门」被动接管，球门由「球门拿球」「比赛结算」接管',
     }),
     ev({
-      name: '掉球', owner: 'player', trigger: '被动', listen: ['受击'], basePriority: 6,
-      condition: '受击结算后，血量数值低于掉球阈值才触发',
-      effects: [
-        { dimension: P, from: '持球', to: '无球' },
-        { dimension: S, from: '射门未激活', to: '未持球' },
-        { dimension: S, from: '射门激活', to: '未持球' },
-        { dimension: S, from: '蓄力', to: '未持球' },
-      ],
-      note: '「受击」体系已删、等你重构；这条先保留着监听，重构后直接生效',
-    }),
-    ev({
-      name: '打断', owner: 'player', trigger: '被动', listen: ['受击'], basePriority: 6,
-      preStates: [{ dimension: S, state: '蓄力' }],
-      condition: '蓄力中被受击命中（唯一退出蓄力的方式）',
-      effects: [{ dimension: S, from: '蓄力', to: '未持球' }],
-      note: '同上：等受击体系重构后自动接入',
-    }),
-    ev({
       name: '进入射门待命', owner: 'player', trigger: '被动', listen: ['拿球'],
       effects: [{ dimension: S, from: '未持球', to: '射门未激活' }],
       note: '拿到球后自动挂上射门状态机（还没满足射门距离）',
     }),
     ev({
       name: '距离小', owner: 'player', trigger: '被动', basePriority: 2,
-      condition: '与球门距离 ≤ 射门距离（持续检测：每次判定都看前提是否满足）',
+      condition: '与球门距离 ≤ 射门距离参数（持续检测；模拟器按真实格子判定）',
       effects: [{ dimension: S, from: '射门未激活', to: '射门激活' }],
     }),
     ev({
       name: '距离大', owner: 'player', trigger: '被动',
-      condition: '与球门距离 > 射门距离（退出射门前提）',
+      condition: '与球门距离 > 射门距离参数（退出射门前提；模拟器按真实格子判定）',
       effects: [{ dimension: S, from: '射门激活', to: '射门未激活' }],
     }),
 
     // ========== 球 · 被动（球只改自己的球路状态） ==========
     ev({
       name: '传出', owner: 'ball', trigger: '被动', listen: ['传球'], basePriority: 7,
+      group: '传球',
       condition: '随机选定一名队友作为追踪目标',
       effects: [{ dimension: B, from: '球被持有', to: '传向队友' }],
       note: '球被动监听到「传球」的信号后，自己进入追踪状态（射门走另一条「飞向球门」）',
     }),
     ev({
       name: '球变自由', owner: 'ball', trigger: '被动', listen: ['掉球'], basePriority: 6,
+      group: '掉球',
       effects: [{ dimension: B, from: '球被持有', to: '自由球' }],
       note: '掉球后球直接成为自由球，朝球场中心滚动',
     }),
     ev({
       name: '球被拿', owner: 'ball', trigger: '被动', listen: ['拿球'], basePriority: 3,
+      group: '拿球',
       effects: [
         { dimension: B, from: '传向队友', to: '球被持有' },
         { dimension: B, from: '自由球', to: '球被持有' },
@@ -241,6 +283,7 @@ export function createDefaultScenario2(): Scenario2 {
     }),
     ev({
       name: '飞向球门', owner: 'ball', trigger: '被动', listen: ['射门'], basePriority: 7,
+      group: '射门',
       condition: '射门出脚后球朝球门飞行，飞抵即算球门拿球',
       effects: [{ dimension: B, from: '球被持有', to: '飞向球门' }],
       note: '配合球门实体的「球门拿球」「比赛结算」完成进球判定',
@@ -268,15 +311,17 @@ export function createDefaultScenario2(): Scenario2 {
     // ========== 球门 · 被动（球门实体的计分与结算） ==========
     ev({
       name: '球门拿球', owner: 'goal', trigger: '被动', listen: ['射门'], basePriority: 8,
-      condition: '球飞抵球门：第 1、2 次拿球时计分',
+      preStates: [{ dimension: B, state: '飞向球门' }],
+      condition: '球飞抵球门（球路必须是「飞向球门」）：第 1、2 次拿球时计分',
       effects: [
         { dimension: G, from: '等待', to: '进1球' },
         { dimension: G, from: '进1球', to: '进2球' },
       ],
-      note: '球门实体拿到球的计数推进',
+      note: '球门实体拿到球的计数推进；前提是球真的朝球门飞（传球/自由球滚到球门口不算进球）',
     }),
     ev({
       name: '比赛结算', owner: 'goal', trigger: '被动', listen: ['射门'], basePriority: 9,
+      preStates: [{ dimension: B, state: '飞向球门' }],
       condition: '球门实体累计拿满 3 次球——无论当前处于哪个状态（覆盖总超图任意状态），都进入「结算」',
       effects: [
         { dimension: G, from: '等待', to: '结算' },
@@ -306,7 +351,7 @@ export function createDefaultScenario2(): Scenario2 {
       [B]: '自由球',
       [G]: '等待',
     },
-    balance: { damage: 15, hpMax: 100, hpDropThreshold: 30, hpRegen: 5, displacement: 5 },
+    balance: { damage: 15, hpMax: 100, hpDropThreshold: 30, hpRegen: 5, displacement: 5, attackRange: 2, shootRange: 3 },
     createdAt: now,
     updatedAt: now,
   };

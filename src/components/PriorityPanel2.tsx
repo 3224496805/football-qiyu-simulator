@@ -1,15 +1,56 @@
 // 优先级面板 v2：全部事件的权威排名（在总超图上计算）
-// 公式：最终分 = 0.4 × 稳态概率 + 0.3 × 主循环路径分（短环内 × 0.3 惩罚）+ 0.3 × 手动微调
+// 公式：最终分 = 稳态权重 × 稳态概率 + 路径权重 × 主循环路径分（短环内 × 惩罚）+ 手动权重 × 手动微调
+// 顶部滑杆可以实时调整公式里的每个数，改完排名立刻重算，并随方案一起保存/导出
 // 每一行都能点开看"分数是哪来的"，拒绝黑箱
 import { Fragment, useMemo, useState } from 'react';
 import { computePriorities2 } from '@/lib/priority2';
-import type { Scenario2 } from '@/types/model2';
-import { ENTITY_NAMES } from '@/types/model2';
+import type { PriorityWeights, Scenario2 } from '@/types/model2';
+import { DEFAULT_PRIORITY_WEIGHTS, ENTITY_NAMES } from '@/types/model2';
 
-export default function PriorityPanel2({ sc }: { sc: Scenario2 }) {
-  const result = useMemo(() => computePriorities2(sc), [sc]);
+interface Props {
+  sc: Scenario2;
+  onChange?: (sc: Scenario2) => void;
+}
+
+// 一条滑杆：标签 + 当前值 + 拖动条
+function WeightSlider({ label, tip, value, min, max, step, onSlide }: {
+  label: string; tip: string; value: number; min: number; max: number; step: number;
+  onSlide: (v: number) => void;
+}) {
+  return (
+    <label className="text-xs space-y-1 block" title={tip}>
+      <div className="flex justify-between">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono font-bold">{value.toFixed(2)}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onSlide(Number(e.target.value))}
+        className="w-full accent-primary cursor-pointer" />
+      <div className="text-[10px] text-muted-foreground leading-snug">{tip}</div>
+    </label>
+  );
+}
+
+export default function PriorityPanel2({ sc, onChange }: Props) {
+  const w = sc.weights ?? DEFAULT_PRIORITY_WEIGHTS;
+  const result = useMemo(() => computePriorities2(sc, w), [sc, w]);
   const [openId, setOpenId] = useState<string | null>(null);
   const maxScore = Math.max(0.0001, ...result.rows.map((r) => r.score));
+
+  // 改某个权重：写回方案（自动保存），界面随 sc 变化实时重算
+  const setWeight = (key: keyof PriorityWeights, value: number) => {
+    if (!onChange) return;
+    const draft = JSON.parse(JSON.stringify(sc)) as Scenario2;
+    draft.weights = { ...w, [key]: value };
+    onChange(draft);
+  };
+  const resetWeights = () => {
+    if (!onChange) return;
+    const draft = JSON.parse(JSON.stringify(sc)) as Scenario2;
+    delete draft.weights;
+    onChange(draft);
+  };
+  const isDefault = !sc.weights;
 
   return (
     <div className="p-4 space-y-4 max-w-5xl mx-auto">
@@ -27,10 +68,41 @@ export default function PriorityPanel2({ sc }: { sc: Scenario2 }) {
         ))}
       </div>
 
+      {/* 公式调节滑杆：公式里的每个数都能拖，排名立刻重算，随方案保存 */}
+      <div className="border rounded-lg bg-card">
+        <div className="px-3 py-2 bg-muted/50 flex items-center justify-between">
+          <span className="font-bold text-xs">打分公式调节</span>
+          <button onClick={resetWeights} disabled={isDefault}
+            className="px-2 py-0.5 border rounded text-xs hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed">
+            恢复默认（0.4 / 0.3 / 0.3 / 短环×0.3 / 跳转0.15）
+          </button>
+        </div>
+        <div className="p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-3">
+          <WeightSlider label="稳态概率权重" value={w.wSteady} min={0} max={1} step={0.05}
+            tip="长期运行下停留越多的状态，它发出的变化越重要。想突出“常发生”的事件就调高。"
+            onSlide={(v) => setWeight('wSteady', v)} />
+          <WeightSlider label="主循环路径权重" value={w.wPath} min={0} max={1} step={0.05}
+            tip="离主循环越近、能到达的层越深越高分。想突出“通往大循环路上”的事件就调高。"
+            onSlide={(v) => setWeight('wPath', v)} />
+          <WeightSlider label="手动微调权重" value={w.wManual} min={0} max={1} step={0.05}
+            tip="事件编辑里「基础优先级 ÷ 10」占的比重。想让自己填的基础优先级说了算就调高。"
+            onSlide={(v) => setWeight('wManual', v)} />
+          <WeightSlider label="短环惩罚（得分×几）" value={w.penalty} min={0} max={1} step={0.05}
+            tip="落在短环（2~3 个状态的小死循环）里的变化，得分乘以这个数。0 = 完全压掉，1 = 不惩罚。"
+            onSlide={(v) => setWeight('penalty', v)} />
+          <WeightSlider label="随机跳转概率" value={w.jump} min={0} max={0.5} step={0.05}
+            tip="算稳态时每一步随机跳到任意状态的几率，防止死角状态永远轮不到。一般 0.1~0.2，别超过 0.5。"
+            onSlide={(v) => setWeight('jump', v)} />
+        </div>
+        <div className="px-3 pb-2 text-[10px] text-muted-foreground">
+          三个权重之和不必等于 1（只影响分数的整体刻度，不影响谁高谁低的相对比较）；拖动后排名实时重算，并随方案一起保存、导出。
+        </div>
+      </div>
+
       <div className="border rounded p-3 bg-muted/40 text-xs leading-relaxed">
-        <b>打分公式（在总超图上算）：</b>最终分 = 0.4 × 稳态概率 + 0.3 × 主循环路径分 + 0.3 × 手动微调（基础优先级 ÷ 10）。
-        稳态概率 = 长期运行下状态的停留概率（幂迭代收敛）；路径分 = 距主循环越近、能到达的层越深越高，主循环内 = 1；
-        落在短环（2~3 个状态的小圈）里的变化 × 0.3 惩罚。事件有多条变化时按最高分的那条计。
+        <b>打分公式（在总超图上算）：</b>最终分 = {w.wSteady.toFixed(2)} × 稳态概率 + {w.wPath.toFixed(2)} × 主循环路径分 + {w.wManual.toFixed(2)} × 手动微调（基础优先级 ÷ 10）。
+        稳态概率 = 长期运行下状态的停留概率（幂迭代收敛，每步 {Math.round(w.jump * 100)}% 几率随机跳转防死角）；路径分 = 距主循环越近、能到达的层越深越高，主循环内 = 1；
+        落在短环（2~3 个状态的小圈）里的变化 × {w.penalty.toFixed(2)} 惩罚。事件有多条变化时按最高分的那条计。
         主循环成员：{result.mainLoop.length > 0 ? result.mainLoop.join('、') : '（无）'}
       </div>
 
@@ -61,8 +133,18 @@ export default function PriorityPanel2({ sc }: { sc: Scenario2 }) {
                 <td className="px-2 py-1.5 font-mono text-xs">{r.rank}</td>
                 <td className="px-2 py-1.5">
                   <span className="font-medium">{r.name}</span>
-                  <span className={`ml-1.5 text-[10px] px-1 rounded-full text-white ${r.trigger === '主动' ? 'bg-blue-600' : 'bg-orange-600'}`}>{r.trigger}</span>
-                  <span className="ml-1 text-[10px] px-1 rounded-full bg-slate-200 dark:bg-slate-700">{ENTITY_NAMES[r.owner as keyof typeof ENTITY_NAMES]}</span>
+                  {r.trigger === '复合' ? (
+                    <span className="ml-1.5 text-[10px] px-1 rounded-full text-white bg-violet-600">复合</span>
+                  ) : (
+                    <span className={`ml-1.5 text-[10px] px-1 rounded-full text-white ${r.trigger === '主动' ? 'bg-blue-600' : 'bg-orange-600'}`}>{r.trigger}</span>
+                  )}
+                  {r.owner === 'multi' ? (
+                    <span className="ml-1 text-[10px] px-1 rounded-full bg-violet-100 dark:bg-violet-900 text-violet-700 dark:text-violet-300">
+                      {r.members!.map((m) => m.name).join('＋')}
+                    </span>
+                  ) : (
+                    <span className="ml-1 text-[10px] px-1 rounded-full bg-slate-200 dark:bg-slate-700">{ENTITY_NAMES[r.owner as keyof typeof ENTITY_NAMES]}</span>
+                  )}
                 </td>
                 <td className="px-2 py-1.5">
                   <div className="flex items-center gap-2">

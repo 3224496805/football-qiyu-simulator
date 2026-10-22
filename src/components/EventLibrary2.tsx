@@ -36,6 +36,25 @@ export default function EventLibrary2({ sc, selectedEventId, onSelect, onNew, on
     });
   }, [sc.events, q, triggerFilter, dimFilter]);
 
+  // 复合事件：同一个"复合组名"的事件合并显示为一张卡（成员仍各自可编辑/删除）
+  const cards = useMemo(() => {
+    const groups = new Map<string, QiyuEvent[]>();
+    const order: string[] = [];
+    for (const ev of filtered) {
+      const key = ev.group?.trim() ? `g:${ev.group.trim()}` : `e:${ev.id}`;
+      if (!groups.has(key)) order.push(key);
+      const arr = groups.get(key) ?? [];
+      arr.push(ev);
+      groups.set(key, arr);
+    }
+    return order.map((k) => groups.get(k)!);
+  }, [filtered]);
+
+  const compositeCount = useMemo(
+    () => new Set(sc.events.map((e) => e.group?.trim()).filter(Boolean)).size,
+    [sc.events],
+  );
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-2 border-b space-y-2">
@@ -60,12 +79,71 @@ export default function EventLibrary2({ sc, selectedEventId, onSelect, onNew, on
         </select>
       </div>
       <div className="flex-1 overflow-auto p-2 space-y-2">
-        {filtered.length === 0 && (
+        {cards.length === 0 && (
           <div className="text-xs text-muted-foreground text-center py-6">
             {sc.events.length === 0 ? '事件库是空的，点上面「新建事件」开始' : '没有符合筛选条件的事件'}
           </div>
         )}
-        {filtered.map((ev) => {
+        {cards.map((members) => {
+          const ev0 = members[0];
+          const isComposite = members.length > 1 && !!ev0.group?.trim();
+          const anySel = members.some((m) => m.id === selectedEventId);
+          if (isComposite) {
+            // 复合事件卡：一张卡 = 一次完整动作的所有实体半边（如 拿球 = 角色的「拿球」+ 球的「球被拿」）
+            return (
+              <div key={`g:${ev0.group}`}
+                onClick={() => onSelect(anySel ? null : ev0.id)}
+                className={`border rounded-lg p-2 cursor-pointer transition-colors ${anySel ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/30' : 'hover:bg-muted/60 bg-card'}`}>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-bold text-sm">{ev0.group!.trim()}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full text-white bg-violet-600">复合事件</span>
+                  <span className="text-[10px] text-muted-foreground">{members.length} 个成员</span>
+                </div>
+                <div className="mt-1.5 space-y-1.5">
+                  {members.map((ev) => (
+                    <div key={ev.id} className="border-l-2 border-violet-300 dark:border-violet-700 pl-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-medium text-xs">{ev.name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${OWNER_BADGE[ev.owner]}`}>{ENTITY_NAMES[ev.owner]}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full text-white ${ev.trigger === '主动' ? 'bg-blue-600' : 'bg-orange-600'}`}>{ev.trigger}</span>
+                        {ev.trigger === '被动' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700">
+                            {ev.listen.length > 0 ? `监听 ${ev.listen.join('、')}` : '持续检测'}
+                          </span>
+                        )}
+                      </div>
+                      {ev.preStates.length > 0 && (
+                        <div className="text-[11px] text-muted-foreground mt-0.5">
+                          前提：{ev.preStates.map((p) => `${dimNameOf(sc, p.dimension)}${p.not ? '≠' : '='}${p.state}`).join('；')}
+                        </div>
+                      )}
+                      {ev.condition && <div className="text-[11px] text-muted-foreground mt-0.5">条件：{ev.condition}</div>}
+                      {ev.effects.length > 0 && (
+                        <div className="text-[11px] mt-0.5 space-y-0">
+                          {ev.effects.slice(0, 3).map((f, i) => (
+                            <div key={i}>{dimNameOf(sc, f.dimension)}：{f.from} → {f.to}</div>
+                          ))}
+                          {ev.effects.length > 3 && <div className="text-muted-foreground">…共 {ev.effects.length} 条状态变化</div>}
+                        </div>
+                      )}
+                      {ev.effects.length === 0 && <div className="text-[11px] text-slate-500 mt-0.5">（纯数值/纯信号事件，不上图）</div>}
+                      {ev.numeric.length > 0 && (
+                        <div className="text-[11px] text-rose-600 dark:text-rose-400 mt-0.5">
+                          数值：{ev.numeric.map((n) => `${n.kind}${n.value}`).join('；')}
+                        </div>
+                      )}
+                      <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => onEdit(ev)} className="px-2 py-0.5 border rounded text-[11px] hover:bg-muted">编辑</button>
+                        <button onClick={() => onDuplicate(ev)} className="px-2 py-0.5 border rounded text-[11px] hover:bg-muted">复制</button>
+                        <button onClick={() => onDelete(ev)} className="px-2 py-0.5 border rounded text-[11px] text-red-600 hover:bg-red-50 dark:hover:bg-red-950">删除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          }
+          const ev = ev0;
           const isSel = ev.id === selectedEventId;
           return (
             <div key={ev.id}
@@ -124,6 +202,7 @@ export default function EventLibrary2({ sc, selectedEventId, onSelect, onNew, on
       </div>
       <div className="p-2 border-t text-[11px] text-muted-foreground">
         共 {sc.events.length} 条事件（主动 {sc.events.filter((e) => e.trigger === '主动').length} · 被动 {sc.events.filter((e) => e.trigger === '被动').length}）
+        {compositeCount > 0 && ` · ${compositeCount} 条复合事件`}
       </div>
     </div>
   );

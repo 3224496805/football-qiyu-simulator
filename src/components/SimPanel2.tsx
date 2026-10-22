@@ -1,8 +1,64 @@
-// 动态模拟面板：事件驱动模拟 + 全程事件日志
-// 注意：事件里用文字写的"其他前提"（距离、数值门槛）模拟时不判定，只判定状态前提
+// 动态模拟面板：事件驱动模拟 + 全程事件日志 + 9×9 格点球场实时演示
+// 距离前提已真实判定（拿球 ≤2 格、冲击 ≤ 攻击距离、射门 ≤ 射门距离），不再只是文字说明
 import { useEffect, useRef, useState } from 'react';
 import type { Scenario2 } from '@/types/model2';
 import { initSim2, stepSim2, type SimState } from '@/lib/sim2';
+
+const CELL = 34; // 每格像素
+
+// 9×9 格点球场：每 3 格一条粗的区域分界线；角色=红/蓝圆点，球=⚽，球门=🥅
+function PitchView({ sim }: { sim: SimState }) {
+  const size = CELL * 9;
+  return (
+    <div className="border rounded bg-card p-2">
+      <div className="text-xs font-bold mb-1">球场（9×9 格，粗线是区域分界）</div>
+      <svg width={size} height={size} className="block">
+        {/* 格子底纹 */}
+        {Array.from({ length: 9 }, (_, y) =>
+          Array.from({ length: 9 }, (_, x) => (
+            <rect key={`${x}-${y}`} x={x * CELL} y={y * CELL} width={CELL} height={CELL}
+              fill={(x + y) % 2 === 0 ? 'rgba(34,197,94,0.10)' : 'rgba(34,197,94,0.05)'}
+              stroke="rgba(100,116,139,0.25)" strokeWidth={1} />
+          )),
+        )}
+        {/* 区域分界线（每 3 格一条粗线） */}
+        {[3, 6].map((i) => (
+          <line key={`v${i}`} x1={i * CELL} y1={0} x2={i * CELL} y2={size} stroke="rgba(100,116,139,0.8)" strokeWidth={2.5} />
+        ))}
+        {[3, 6].map((i) => (
+          <line key={`h${i}`} x1={0} y1={i * CELL} x2={size} y2={i * CELL} stroke="rgba(100,116,139,0.8)" strokeWidth={2.5} />
+        ))}
+        {/* 实体（同格多个时散开一点，避免完全重叠） */}
+        {sim.entities.map((e) => {
+          const sameCell = sim.entities.filter((o) => o.cx === e.cx && o.cy === e.cy);
+          const idx = sameCell.findIndex((o) => o.id === e.id);
+          const n = sameCell.length;
+          const ang = n > 1 ? (idx / n) * Math.PI * 2 : 0;
+          const spread = n > 1 ? 8 : 0;
+          const px = e.cx * CELL + CELL / 2 + Math.cos(ang) * spread;
+          const py = e.cy * CELL + CELL / 2 + Math.sin(ang) * spread;
+          if (e.kind === 'ball') {
+            return <text key={e.id} x={px} y={py + 5} textAnchor="middle" fontSize={16}>⚽</text>;
+          }
+          if (e.kind === 'goal') {
+            return <text key={e.id} x={px} y={py + 6} textAnchor="middle" fontSize={18}>🥅</text>;
+          }
+          const color = e.team === 'A' ? '#dc2626' : '#2563eb';
+          return (
+            <g key={e.id}>
+              <circle cx={px} cy={py} r={11} fill={color} stroke="#fff" strokeWidth={1.5} />
+              <text x={px} y={py + 3.5} textAnchor="middle" fontSize={9} fill="#fff" fontWeight="bold">
+                {e.name.replace(/[AB队]/g, '')}
+              </text>
+              {e.hp < 50 && <circle cx={px + 9} cy={py - 9} r={3.5} fill="#f59e0b" stroke="#fff" strokeWidth={1} />}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="text-[10px] text-muted-foreground mt-1">红=A 队 蓝=B 队；角色右上黄点=血量低于 50</div>
+    </div>
+  );
+}
 
 export default function SimPanel2({ sc }: { sc: Scenario2 }) {
   const [sim, setSim] = useState<SimState>(() => initSim2(sc));
@@ -55,8 +111,10 @@ export default function SimPanel2({ sc }: { sc: Scenario2 }) {
           {sim.over && <span className="text-sm font-bold text-red-600">比赛结束（球门已进入结算）</span>}
         </div>
         <p className="text-[11px] text-muted-foreground">
-          只判定状态前提；用文字写的"其他前提"（如距离 ≤ 2 格）在模拟里暂不判定。改了事件库会自动重置。
+          距离前提已真实判定：拿球需离球 ≤ 2 格、冲击需离持球者 ≤ 攻击距离、射门需离球门 ≤ 射门距离（后两个可在维度页的"平衡参数"里调）。改了事件库会自动重置。
         </p>
+
+        <PitchView sim={sim} />
 
         <div className="space-y-2">
           {sim.entities.map((e) => (

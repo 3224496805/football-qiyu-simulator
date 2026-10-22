@@ -12,9 +12,9 @@ export interface LayoutResult {
   height: number;
 }
 
-const COL_W = 200;  // 层间距
-const ROW_H = 104;  // 同层节点间距
-const PAD = 90;     // 画布留白
+const COL_W = 240;  // 层间距
+const ROW_H = 132;  // 同层节点间距
+const PAD = 110;    // 画布留白
 
 export function layoutGraph(
   nodeKeys: string[],

@@ -1,20 +1,24 @@
 // 优先级算法 v2（在事件库派生的总超图上计算）
 //
-// 每条事件的最终分 = 0.4 × 稳态概率分 + 0.3 × 主循环路径分（短环内 × 0.3 惩罚）+ 0.3 × 手动微调分
-//   稳态概率分：把总超图当作状态转移系统做幂迭代（每条出边等概率 + 15% 随机跳跃防死角），
+// 每条事件的最终分 = 稳态权重 × 稳态概率分 + 路径权重 × 主循环路径分（短环内 × 惩罚系数）+ 手动权重 × 手动微调分
+//   四个权重和短环惩罚、随机跳转概率都可以在优先级页顶部用滑杆实时调整（存在方案里，随导出携带）。
+//   稳态概率分：把总超图当作状态转移系统做幂迭代（每条出边等概率 + 随机跳转防死角），
 //              收敛后每个状态的"长期停留概率"，按最大值归一。长期越常停留的状态，其出边事件越重要。
 //   主循环路径分：Tarjan 找环；主循环 = 成员最多的环。距主循环越近（0.6）+ 能到达的层越深（0.4），
 //              主循环内的状态直接 = 1。鼓励"通往大循环的路上"的事件，抑制短死循环。
 //   手动微调分：事件的"基础优先级" / 10，是给创作者的手动旋钮。
-// 事件有多条状态变化时，取其中最高分的那条作为事件分。
-import type { Scenario2 } from '@/types/model2';
+// 复合事件：填了同一个"复合组名"的跨实体事件（如角色的「拿球」+ 球的「球被拿」）
+//   在排名里合并成一行，状态变化取全组的并集，手动微调取组内最高，分数按合并后的结果算。
+import type { PriorityWeights, QiyuEvent, Scenario2 } from '@/types/model2';
+import { DEFAULT_PRIORITY_WEIGHTS } from '@/types/model2';
 import { buildTotalGraph } from './derive2';
 
 export interface PriorityRow2 {
   eventId: string;
   name: string;
-  trigger: '主动' | '被动';
+  trigger: '主动' | '被动' | '复合';  // 复合 = 复合事件里既有主动也有被动
   owner: string;
+  members?: { id: string; name: string; owner: string; trigger: '主动' | '被动' }[]; // 复合事件的成员
   score: number;        // 最终分
   steady: number;       // 稳态概率分（已按权重折算前的 0~1）
   path: number;         // 主循环路径分 0~1
@@ -33,20 +37,20 @@ export interface PriorityResult2 {
   iterations: number;      // 稳态迭代轮数
   stateCount: number;
   edgeCount: number;
+  weights: PriorityWeights; // 本次计算实际用的权重（供界面回显）
 }
 
-const DAMP = 0.85;      // 阻尼系数（随机跳跃概率 15%）
 const TAU = 4;          // 短环阈值：环成员 2~3 个算短环
-const W_STEADY = 0.4;
-const W_PATH = 0.3;
-const W_MANUAL = 0.3;
-const PENALTY = 0.3;
 
-export function computePriorities2(sc: Scenario2): PriorityResult2 {
+export function computePriorities2(sc: Scenario2, w: PriorityWeights = DEFAULT_PRIORITY_WEIGHTS): PriorityResult2 {
   const g = buildTotalGraph(sc);
   const keys = g.nodes.map((n) => n.key);
   const N = keys.length;
-  if (N === 0) return { rows: [], mainLoop: [], smallCycles: [], iterations: 0, stateCount: 0, edgeCount: 0 };
+  if (N === 0) return { rows: [], mainLoop: [], smallCycles: [], iterations: 0, stateCount: 0, edgeCount: 0, weights: w };
+
+  // 阻尼系数 = 1 − 随机跳转概率（跳转概率钳在 0~0.95，防止极端输入把迭代弄坏）
+  const jump = Math.min(0.95, Math.max(0, w.jump));
+  const DAMP = 1 - jump;
 
   // ---------- 稳态分布（幂迭代） ----------
   const out = new Map<string, string[]>();
@@ -149,30 +153,46 @@ export function computePriorities2(sc: Scenario2): PriorityResult2 {
     return Math.max(0, Math.min(1, near + deep));
   };
 
-  // ---------- 事件评分 ----------
-  const rows: PriorityRow2[] = sc.events.map((ev) => {
+  // ---------- 事件评分（复合组先合并成一条"复合事件"再算分） ----------
+  // 分组：有 group 的按组名聚，没填的各自一行
+  const groups = new Map<string, QiyuEvent[]>();
+  for (const ev of sc.events) {
+    const key = ev.group?.trim() ? `g:${ev.group.trim()}` : `e:${ev.id}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(ev);
+    groups.set(key, arr);
+  }
+
+  const rows: PriorityRow2[] = [...groups.values()].map((members) => {
+    const ev0 = members[0];
+    const isComposite = members.length > 1 && !!ev0.group?.trim();
+    const allEffects = members.flatMap((m) => m.effects);
     let best = 0;
     let bestFrom = '';
     let bestPenalized = false;
-    for (const f of ev.effects) {
+    for (const f of allEffects) {
       if (!steadyOf.has(f.from)) continue;
       const penalized = smallSet.has(f.from) && smallSet.has(f.to);
-      const raw = W_STEADY * steadyOf.get(f.from)! + W_PATH * pathOf(f.from);
-      const v = penalized ? raw * PENALTY : raw;
+      const raw = w.wSteady * steadyOf.get(f.from)! + w.wPath * pathOf(f.from);
+      const v = penalized ? raw * w.penalty : raw;
       if (v > best || bestFrom === '') { best = v; bestFrom = f.from; bestPenalized = penalized; }
     }
-    const manual = Math.min(1, ev.basePriority / 10);
-    const score = +(best + W_MANUAL * manual).toFixed(4);
+    const manual = Math.min(1, Math.max(...members.map((m) => m.basePriority)) / 10);
+    const score = +(best + w.wManual * manual).toFixed(4);
     const steady = bestFrom ? +(steadyOf.get(bestFrom) ?? 0).toFixed(3) : 0;
     const path = bestFrom ? +pathOf(bestFrom).toFixed(3) : 0;
     const bits: string[] = [];
+    if (isComposite) bits.push(`复合事件：${members.map((m) => `${m.name}（${m.owner === 'player' ? '角色' : m.owner === 'ball' ? '球' : '球门'}·${m.trigger}）`).join(' + ')}`);
     bits.push(bestFrom
-      ? `主要靠源状态「${bestFrom}」：稳态 ${(steady * W_STEADY).toFixed(3)} + 路径 ${(path * W_PATH).toFixed(3)}`
+      ? `主要靠源状态「${bestFrom}」：稳态 ${(steady * w.wSteady).toFixed(3)} + 路径 ${(path * w.wPath).toFixed(3)}`
       : '没有状态变化，只有手动分');
-    if (bestPenalized) bits.push('在短环内，×0.3 惩罚');
-    bits.push(`手动微调 +${(W_MANUAL * manual).toFixed(3)}`);
+    if (bestPenalized) bits.push(`在短环内，×${w.penalty} 惩罚`);
+    bits.push(`手动微调 +${(w.wManual * manual).toFixed(3)}`);
     return {
-      eventId: ev.id, name: ev.name, trigger: ev.trigger, owner: ev.owner,
+      eventId: ev0.id, name: isComposite ? ev0.group!.trim() : ev0.name,
+      trigger: isComposite ? '复合' : ev0.trigger,
+      owner: isComposite ? 'multi' : ev0.owner,
+      members: isComposite ? members.map((m) => ({ id: m.id, name: m.name, owner: m.owner, trigger: m.trigger })) : undefined,
       score, steady, path, penalized: bestPenalized, manual,
       bestFrom, inMainLoop: mainSet.has(bestFrom), rank: 0,
       explain: bits.join('；'),
@@ -181,5 +201,5 @@ export function computePriorities2(sc: Scenario2): PriorityResult2 {
   rows.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'zh'));
   rows.forEach((r, i) => { r.rank = i + 1; });
 
-  return { rows, mainLoop, smallCycles, iterations, stateCount: N, edgeCount: g.edges.length };
+  return { rows, mainLoop, smallCycles, iterations, stateCount: N, edgeCount: g.edges.length, weights: w };
 }

@@ -29,7 +29,7 @@ interface Props {
   onRemoveState?: (nodeKey: string) => void;
 }
 
-const R = 30; // 节点半径
+const R = 34; // 节点半径
 const COLOR_ACTIVE = '#2563eb'; // 主动=蓝
 const COLOR_PASSIVE = '#ea580c'; // 被动=橙
 const COLOR_UNKNOWN = '#64748b';
@@ -46,6 +46,10 @@ export default function GraphView2(props: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pan = useRef<{ x: number; y: number; left: number; top: number; moved: boolean } | null>(null);
   const panSuppress = useRef(false); // 拖拽平移后抑制紧随其后的点击（避免误取消选中）
+  // 节点手动拖动：offsets 记录每个状态被拖离自动位置的偏移；图一改就回到自动排布
+  const [offsets, setOffsets] = useState<Record<string, { dx: number; dy: number }>>({});
+  const nodeDrag = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null);
+  useEffect(() => { setOffsets({}); }, [graph]);
 
   // Ctrl/⌘ + 滚轮 = 缩放画布（需要原生监听才能阻止浏览器整页缩放）
   useEffect(() => {
@@ -88,6 +92,14 @@ export default function GraphView2(props: Props) {
     () => layoutGraph(graph.nodes.map((n) => n.key), graph.edges, startKeys),
     [graph, startKeys],
   );
+
+  // 节点实际位置 = 自动排布位置 + 手动拖动偏移
+  const posOf = (key: string) => {
+    const p = layout.pos.get(key);
+    if (!p) return undefined;
+    const o = offsets[key];
+    return o ? { x: p.x + o.dx, y: p.y + o.dy } : p;
+  };
 
   // 同一对节点（含反向）之间的多条边按"车道"错开，避免标签叠在一起
   const lane = useMemo(() => {
@@ -152,8 +164,8 @@ export default function GraphView2(props: Props) {
   };
 
   const renderEdge = (ed: DerivedGraph['edges'][number]) => {
-    const f = layout.pos.get(ed.from);
-    const t = layout.pos.get(ed.to);
+    const f = posOf(ed.from);
+    const t = posOf(ed.to);
     if (!f || !t) return null;
     const ev = eventById.get(ed.eventId);
     const isSelEdge = selectedEdgeId === ed.id;
@@ -239,6 +251,12 @@ export default function GraphView2(props: Props) {
             <button onClick={() => setScale(1)} className="px-2 py-0.5 border rounded text-xs hover:bg-muted">
               {Math.round(scale * 100)}%
             </button>
+            {Object.keys(offsets).length > 0 && (
+              <button onClick={() => setOffsets({})}
+                className="px-2 py-0.5 border rounded text-xs hover:bg-muted text-amber-700 dark:text-amber-300">
+                重新自动排布
+              </button>
+            )}
             {editable && (
               <>
                 <button onClick={() => { setLinkMode(!linkMode); setLinkFrom(null); setChooser(null); }}
@@ -267,7 +285,7 @@ export default function GraphView2(props: Props) {
             {editable
               ? '双击空白 = 新建状态 · 连线模式 = 点起点再点终点 · 点连线/状态后用「删除选中」移除 · 一切修改都写回左栏事件库'
               : '总超图是合并视图，只读；要修改请切到某个单维度图'}
-            {' · 按住空白拖拽 = 平移 · Ctrl+滚轮 = 缩放'}
+            {' · 按住空白拖拽 = 平移 · 按住状态圆圈拖拽 = 移动它 · Ctrl+滚轮 = 缩放'}
           </div>
         </div>
       </div>
@@ -316,13 +334,37 @@ export default function GraphView2(props: Props) {
         onPointerCancel={onPanEnd}>
         {graph.edges.map(renderEdge)}
         {graph.nodes.map((n) => {
-          const p = layout.pos.get(n.key);
+          const p = posOf(n.key);
           if (!p) return null;
           const stroke = n.declared ? nodeColor(n.dims) : '#94a3b8';
           const isSel = selNode === n.key;
           return (
             <g key={n.key}
-              onClick={(e) => { e.stopPropagation(); if (linkMode) { onNodeClick(n.key); } else { setSelectedEdgeId(null); props.onSelectNode(n.key); } }}
+              onPointerDown={(e) => {
+                if (linkMode) return; // 连线模式下不抢点击
+                nodeDrag.current = { key: n.key, x: e.clientX, y: e.clientY, moved: false };
+                (e.currentTarget as SVGGElement).setPointerCapture(e.pointerId);
+                e.stopPropagation();
+              }}
+              onPointerMove={(e) => {
+                const d = nodeDrag.current;
+                if (!d || d.key !== n.key) return;
+                const dx = e.clientX - d.x;
+                const dy = e.clientY - d.y;
+                if (!d.moved && Math.hypot(dx, dy) < 4) return; // 轻微移动仍算点击
+                d.moved = true;
+                setOffsets((prev) => ({
+                  ...prev,
+                  [n.key]: { dx: (prev[n.key]?.dx ?? 0) + dx / scale, dy: (prev[n.key]?.dy ?? 0) + dy / scale },
+                }));
+                d.x = e.clientX;
+                d.y = e.clientY;
+              }}
+              onPointerUp={() => {
+                if (nodeDrag.current?.moved) panSuppress.current = true; // 拖完不要触发"点空白取消选中"
+                nodeDrag.current = null;
+              }}
+              onClick={(e) => { e.stopPropagation(); if (nodeDrag.current) return; if (linkMode) { onNodeClick(n.key); } else { setSelectedEdgeId(null); props.onSelectNode(n.key); } }}
               className="cursor-pointer">
               {n.glued && mode === 'total' && (
                 <circle cx={p.x} cy={p.y} r={R + 6} fill="none" stroke="#d97706" strokeWidth={2} strokeDasharray="5 4" />
@@ -331,17 +373,28 @@ export default function GraphView2(props: Props) {
                 fill={linkFrom === n.key ? '#fbbf24' : isSel ? '#fef3c7' : '#ffffff'}
                 stroke={isSel ? '#f59e0b' : stroke} strokeWidth={isSel ? 4 : 3}
                 strokeDasharray={n.declared ? undefined : '5 4'} />
-              <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={n.name.length > 5 ? 11 : 13} fontWeight={600}
-                fill="#0f172a" className="pointer-events-none select-none">
-                {n.name.length > 7 ? n.name.slice(0, 7) : n.name}
-              </text>
+              {(() => {
+                // 状态名折行：超过 4 个字就拆成两行（每行最多 5 个字），字太多就截断
+                const nm = n.name;
+                const lines: string[] = nm.length <= 4 ? [nm] : [nm.slice(0, 5), nm.length > 10 ? `${nm.slice(5, 9)}…` : nm.slice(5)];
+                const lh = 14; // 行高
+                return (
+                  <text x={p.x} y={p.y - ((lines.length - 1) * lh) / 2 + 4} textAnchor="middle"
+                    fontSize={lines.some((l) => l.length > 4) ? 11 : 13} fontWeight={600}
+                    fill="#0f172a" className="pointer-events-none select-none">
+                    {lines.map((l, i) => (
+                      <tspan key={i} x={p.x} dy={i === 0 ? 0 : lh}>{l}</tspan>
+                    ))}
+                  </text>
+                );
+              })()}
               {n.isStart && (
                 <g className="pointer-events-none">
                   <circle cx={p.x - R * 0.75} cy={p.y - R * 0.75} r={10} fill="#16a34a" stroke="#ffffff" strokeWidth={1.5} />
                   <text x={p.x - R * 0.75} y={p.y - R * 0.75 + 3.5} textAnchor="middle" fontSize={9} fontWeight={700} fill="#ffffff">起</text>
                 </g>
               )}
-              <title>{`${n.name}${n.glued ? `\n同名粘合：出现在 ${n.dims.map((d) => sc.dimensions.find((x) => x.id === d)?.name ?? d).join('、')} 中` : ''}${n.isStart ? '\n起始状态' : ''}${n.declared ? '' : '\n（未在维度里正式声明）'}`}</title>
+              <title>{`${n.name}${n.glued ? `\n同名粘合：出现在 ${n.dims.map((d) => sc.dimensions.find((x) => x.id === d)?.name ?? d).join('、')} 中` : ''}${n.isStart ? '\n起始状态' : ''}${n.declared ? '' : '\n（未在维度里正式声明）'}\n按住可直接拖动位置`}</title>
             </g>
           );
         })}
