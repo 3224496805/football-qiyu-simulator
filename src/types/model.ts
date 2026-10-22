@@ -46,6 +46,8 @@ export interface DomainEdge {
   isHyper: boolean;     // 多实体联合事件（超边）
   affectsOthers: boolean; // 是否影响其他实体
   professionIds?: string[]; // 仅限这些职业拥有该事件；空/undefined = 全职业通用
+  trigger?: 'active' | 'passive'; // 触发方式：主动触发（默认）/ 被动触发（监听的事件执行后，于下一次判定加入队列）
+  listenEvents?: string[];      // passive：监听的事件名列表
   params: EventParams;
 }
 
@@ -94,7 +96,7 @@ export interface FormationSpot { id: string; col: number; row: number } // id=�
 
 export interface Scenario {
   id: string;
-  version: number;          // 结构版本，用于存量数据迁移（当前 6）
+  version: number;          // 结构版本，用于存量数据迁移（当前 7）
   name: string;
   playersPerTeam: number;   // 默认 3（总数 6），上限 4（总数 8）
   professions: Profession[];
@@ -108,7 +110,7 @@ export interface Scenario {
 }
 
 // 默认事件排序（逻辑链：鼓励合作；v6 按 3v3 新方案更新）
-export const DEFAULT_EVENT_ORDER = ['传', '传球', '掉', '掉球', '射', '拿', '拿球', '传出', '位置更新', '距离小', '距离大', '蓄力储能', '蓄力状态结束', '打断', '被打断', '状态结束', '受击', '恢复', '回复', '争顶', '持球', '射门结束'];
+export const DEFAULT_EVENT_ORDER = ['传', '传球', '掉', '掉球', '受击掉球', '射', '拿', '拿球', '传出', '位置更新', '距离小', '距离大', '蓄力储能', '蓄力状态结束', '打断', '被打断', '状态结束', '受击', '恢复', '回复', '争顶', '持球', '射门结束'];
 
 export function defaultOrderIndex(name: string): number {
   const i = DEFAULT_EVENT_ORDER.indexOf(name);

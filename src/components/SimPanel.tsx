@@ -37,6 +37,7 @@ export default function SimPanel({ scenario, result }: Props) {
 
   const totalFired = statRows.reduce((a, r) => a + r.fired, 0);
   const totalSup = statRows.reduce((a, r) => a + r.sup, 0);
+  const totalQueued = Object.values(sim.stats.queued).reduce((a, b) => a + b, 0);
 
   return (
     <div className="p-4 space-y-4 text-sm">
@@ -58,7 +59,7 @@ export default function SimPanel({ scenario, result }: Props) {
           <span className="text-xs text-muted-foreground">×{activity}</span>
         </label>
         <span className="ml-auto text-xs text-muted-foreground">
-          tick <b className="text-foreground">{sim.stats.tick}</b> · 执行 {totalFired} · 同刻抑制 {totalSup}
+          tick <b className="text-foreground">{sim.stats.tick}</b> · 执行 {totalFired} · 同刻抑制 {totalSup} · 被动入队 {totalQueued}
         </span>
       </div>
 
@@ -123,9 +124,10 @@ export default function SimPanel({ scenario, result }: Props) {
             <h4 className="font-bold mb-2">事件队列日志（最近 {sim.stats.log.length} 条）</h4>
             <div className="max-h-56 overflow-auto text-xs space-y-0.5">
               {[...sim.stats.log].reverse().map((l, i) => (
-                <div key={i} className={l.outcome === 'suppressed' ? 'text-red-600/80' : ''}>
+                <div key={i} className={l.outcome === 'suppressed' ? 'text-red-600/80' : l.outcome === 'missed' ? 'text-amber-600/80' : ''}>
                   <span className="text-muted-foreground">[{l.tick}]</span> {l.entity} {l.from} —{l.event}→ {l.to}
                   {l.outcome === 'suppressed' && <span className="text-red-500">（抑制：{l.reason}）</span>}
+                  {l.outcome === 'missed' && <span className="text-amber-500">（{l.reason}）</span>}
                 </div>
               ))}
               {sim.stats.log.length === 0 && <p className="text-muted-foreground">播放或单步推进后开始记录。</p>}

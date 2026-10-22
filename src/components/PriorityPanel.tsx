@@ -84,7 +84,15 @@ export default function PriorityPanel({ result, scenario, alpha, onAlpha }: Prop
             {scores.map((s) => (
               <tr key={s.edge.id} className={`border-t ${s.inShortCycle ? 'bg-red-50 dark:bg-red-950/40' : s.inMainCycle ? 'bg-emerald-50 dark:bg-emerald-950/40' : ''}`}>
                 <td className="p-2 font-mono">{s.rank}</td>
-                <td className="p-2 font-medium">{s.edge.event}{s.edge.isHyper ? ' ⇄' : ''}</td>
+                <td className="p-2 font-medium">
+                  {s.edge.event}{s.edge.isHyper ? ' ⇄' : ''}
+                  {s.edge.trigger === 'passive' && (
+                    <span className="ml-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                      title={`被动触发：监听 ${(s.edge.listenEvents ?? []).join('、')}，事件执行后于下一次判定加入队列`}>
+                      被动
+                    </span>
+                  )}
+                </td>
                 <td className="p-2 text-muted-foreground">{s.edge.fromName} → {s.edge.toName}</td>
                 <td className="p-2 text-muted-foreground">{graphName(s.edge.domain)}</td>
                 <td className="p-2 text-xs">{profName(s.edge.professionIds)}</td>

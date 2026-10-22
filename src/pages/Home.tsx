@@ -24,7 +24,7 @@ function graphColor(id: string, graphs: Scenario['graphs']): string {
   return GRAPH_COLORS[i % GRAPH_COLORS.length];
 }
 
-const TABS = ['图编辑', '位置联合状态', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '技能模板', '动态模拟'] as const;
+const TABS = ['图编辑', '位置联合状态', '复合预览', '总超图', 'DFS 搜索树', '优先级计算', '参数建议', '职业名册', '事件库', '动态模拟'] as const;
 
 export default function Home() {
   const [metas, setMetas] = useState(listScenarios);
@@ -233,7 +233,7 @@ export default function Home() {
           <ProfessionPanel scenario={scenario} onChange={setScenario} />
         )}
         {tab === '动态模拟' && <SimPanel scenario={scenario} result={result} />}
-        {tab === '技能模板' && (
+        {tab === '事件库' && (
           <SkillPanel scenario={scenario} onChange={(skills) => setScenario({ ...scenario, skills })} />
         )}
       </main>

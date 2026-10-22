@@ -84,6 +84,33 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
             onChange={(e) => set('event', e.target.value)} />
         </label>
 
+        <div className="text-sm border rounded p-2 space-y-2 bg-muted/30">
+          <div className="font-medium">触发方式</div>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={(form.trigger ?? 'active') === 'active'}
+                onChange={() => { set('trigger', 'active'); set('listenEvents', undefined); }} />
+              主动触发（每 tick 按概率竞争）
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={form.trigger === 'passive'}
+                onChange={() => set('trigger', 'passive')} />
+              被动触发（监听事件执行后，下一次判定加入队列）
+            </label>
+          </div>
+          {form.trigger === 'passive' && (
+            <label className="block">
+              监听事件（逗号分隔；该实体上这些事件执行后，本事件于下一次判定加入队列）
+              <input className="mt-1 w-full border rounded px-2 py-1 bg-background"
+                value={(form.listenEvents ?? []).join('，')}
+                onChange={(e) => set('listenEvents', e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean))} />
+            </label>
+          )}
+          {form.trigger === 'passive' && (form.listenEvents ?? []).length === 0 && (
+            <p className="text-xs text-amber-600">尚未配置监听事件：被动事件永远不会入队。</p>
+          )}
+        </div>
+
         <label className="block text-sm">
           状态前提（千星沙盒事件节点给出）
           <textarea className="mt-1 w-full border rounded px-2 py-1 bg-background" rows={2} value={form.condition}
@@ -136,7 +163,7 @@ export default function EdgeDialog({ edge, fromName, toName, skills, professions
         )}
 
         <div className="text-sm border rounded p-2 space-y-2 bg-muted/30">
-          <div className="font-medium">主动技能（技能模板已并入事件编辑栏）</div>
+          <div className="font-medium">主动技能（事件库已并入事件编辑栏）</div>
           <select className="w-full border rounded px-2 py-1 bg-background"
             value={form.skillId ?? ''}
             onChange={(e) => applySkill(e.target.value)}>

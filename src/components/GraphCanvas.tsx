@@ -55,6 +55,7 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
               from: linkFrom,
               to: id,
               condition: '（待编辑条件）',
+              trigger: 'active',
               isHyper: false,
               affectsOthers: false,
               params: { basePriority: 1, cooldown: 0, structWeight: 1 },

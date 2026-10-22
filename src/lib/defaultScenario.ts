@@ -17,6 +17,7 @@ export function makeGraph(id: string, owner: EntityKind, name: string, nodeDefs:
   event: string; from: string; to: string; condition: string;
   skillKind?: SkillTemplate['kind']; skillId?: string; isHyper?: boolean; affectsOthers?: boolean;
   professionIds?: string[]; basePriority?: number; cooldown?: number; structWeight?: number;
+  trigger?: 'active' | 'passive'; listenEvents?: string[];
 }>): DomainGraph {
   const nodes = nodeDefs.map((n) => ({ id: nid('n'), name: n.name, x: n.x, y: n.y, note: n.note, timeLimit: n.timeLimit }));
   const find = (n: string) => nodes.find((x) => x.name === n)!.id;
@@ -33,6 +34,8 @@ export function makeGraph(id: string, owner: EntityKind, name: string, nodeDefs:
       isHyper: e.isHyper ?? false,
       affectsOthers: e.affectsOthers ?? false,
       professionIds: e.professionIds,
+      trigger: e.trigger ?? 'active',
+      listenEvents: e.listenEvents,
       params: {
         basePriority: e.basePriority ?? 1,
         cooldown: e.cooldown ?? 0,
@@ -51,6 +54,7 @@ function possessionGraph(): DomainGraph {
     { event: '拿球', from: '无球', to: '持球', condition: '争抢成功（与球网格坐标距离<抢截半径；球路逻辑同步「拿球」）', isHyper: true, basePriority: 3 },
     { event: '传球', from: '持球', to: '无球', condition: '传球键触发（球权结束；球进入球路逻辑「传出」）', isHyper: true, basePriority: 7, structWeight: 1.2 },
     { event: '掉球', from: '持球', to: '无球', condition: '被断球 或 血量低于掉球阈值（球进入球路逻辑「传出」）', isHyper: true, basePriority: 6 },
+    { event: '受击掉球', from: '持球', to: '无球', condition: '【被动】受击事件执行后进入下一次判定：若此时血量低于掉球阈值则掉球（级联：血量→球权→球路）', isHyper: true, basePriority: 6, trigger: 'passive', listenEvents: ['受击'] },
   ]);
 }
 
@@ -229,7 +233,7 @@ export function createDefaultScenario(): Scenario {
   const now = Date.now();
   return {
     id: newId(),
-    version: 6,
+    version: 7,
     name: '示例：3v3 标准赛',
     playersPerTeam: 3,
     professions: defaultProfessions.map((p) => ({ ...p })),

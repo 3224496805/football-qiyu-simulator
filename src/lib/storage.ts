@@ -38,7 +38,15 @@ function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
-  if (v >= 6) return sc;
+  if (v >= 7) return sc;
+  if (v >= 6) {
+    // v6 → v7：事件触发方式（主动/被动）字段补默认值，其余保留
+    for (const g of Object.values(sc.graphs)) {
+      for (const e of g.edges) e.trigger ??= 'active';
+    }
+    sc.version = 7;
+    return sc;
+  }
   if (v >= 5) {
     const standard = ['possession', 'holding', 'control', 'hp', 'ballTrack'];
     for (const gid of standard) delete sc.graphs[gid];
@@ -50,10 +58,10 @@ function migrate(sc: Scenario): Scenario {
       (s) => !fresh.skills.some((f) => f.name === s.name && f.kind === s.kind),
     );
     sc.skills = [...fresh.skills, ...customs];
-    sc.version = 6;
+    sc.version = 7;
     return sc;
   }
-  sc.version = 6;
+  sc.version = 7;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

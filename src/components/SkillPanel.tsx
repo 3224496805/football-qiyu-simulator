@@ -95,8 +95,8 @@ export default function SkillPanel({ scenario, onChange }: Props) {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-bold text-lg">技能事件模板库</h3>
-          <p className="text-sm text-muted-foreground">四类模板：伤害 / 位移 / 信号（蓄力等）/ 辅助（治疗等）；已并入图编辑的事件编辑栏，可直接在边对话框中新建并绑定。</p>
+          <h3 className="font-bold text-lg">事件库</h3>
+          <p className="text-sm text-muted-foreground">四类事件模板：伤害 / 位移 / 信号（蓄力等）/ 辅助（治疗等）；事件支持主动触发与被动触发（监听其他事件，下一次判定加入队列）。已并入图编辑的事件编辑栏，可就地新建并绑定。</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => add('damage')} className="px-3 py-1 border rounded text-sm bg-red-50 hover:bg-red-100 dark:bg-red-950">+ 伤害</button>
