@@ -9,6 +9,7 @@ import OverviewPanel from '@/components/OverviewPanel';
 import AiGenPanel from '@/components/AiGenPanel';
 import { buildRoster, createDefaultScenario, emptyGraph } from '@/lib/defaultScenario';
 import { computePriorities, suggest } from '@/lib/priority';
+import { APP_VERSION } from '@/lib/version';
 import { deleteScenario, exportScenario, importScenario, listScenarios, loadScenario, newId, saveScenario } from '@/lib/storage';
 import type { DomainEdge, DomainGraph, DomainId, Scenario } from '@/types/model';
 import { ENTITY_NAMES } from '@/types/model';
@@ -142,6 +143,7 @@ export default function Home() {
     <div className="min-h-screen flex flex-col">
       <header className="border-b px-4 py-3 flex items-center gap-3 flex-wrap bg-card">
         <h1 className="text-xl font-bold">⚽ 足球奇域模拟器</h1>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground" title="构建版本：若与你预期不符请强刷（Ctrl+F5）或换新窗口打开">{APP_VERSION}</span>
         <select className="border rounded px-2 py-1 text-sm bg-background" value={scenario.id}
           onChange={(e) => { const sc = loadScenario(e.target.value); if (sc) setScenario(sc); }}>
           {metas.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
