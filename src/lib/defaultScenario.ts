@@ -1,7 +1,7 @@
-// 默认示例 v8：3v3 方案（技能合并为冲击/信号/辅助 + 跨图前提 + 多起点 DFS + 被动级联）
+// 默认示例 v9：3v3 方案（位置图压缩：9×9 网格 + 3×3 区域状态，DFS 仅 sees 区域级转移）
 //
 // 实体归属：
-//   角色实体 ×6：球权逻辑 / 持球逻辑(复合在球权里) / 位置逻辑(10×10 网格) / 姿态控制 / 血量逻辑
+//   角色实体 ×6：球权逻辑 / 持球逻辑(复合在球权里) / 位置逻辑(9×9 网格→3×3 区域) / 姿态控制 / 血量逻辑
 //   球实体 ×1：球路逻辑
 // 权威优先级 = 全部逻辑图经同名状态粘合为总超图后，对总超图做多起点 DFS 搜索树
 import type { DomainGraph, EntityKind, PlayerSpec, PreState, Profession, Scenario, SkillTemplate, StateNode } from '@/types/model';
@@ -79,12 +79,14 @@ function holdingGraph(): DomainGraph {
   ]);
 }
 
-// ---------- 位置逻辑（挂角色）：状态 = 10×10 球场网格点 ----------
-// 球场 120m × 80m 划分为 10列 × 10行 网格，格子中心即坐标：
-//   x = 6 + 12·col（col 0..9），y = 4 + 8·row（row 0..9）
-// 多人位置联合状态 = 各角色网格点的组合
-export const GRID_COLS = 10;
-export const GRID_ROWS = 10;
+// ---------- 位置逻辑（挂角色）：9×9 网格 + 3×3 区域状态 ----------
+// 球场 108m × 72m 划分为 9列 × 9行 网格，格子中心即坐标：
+//   x = 6 + 12·col（col 0..8），y = 4 + 8·row（row 0..8）
+// 逻辑状态 = 3×3 区域（每区 3×3 格）：同区域内移动只是底层坐标变化，不产生逻辑事件，
+// 仅「跨区」才形成位置图上的状态转移。多人位置联合状态 = 各角色区域的组合，
+// 底层仍保留精确格子坐标（伤害判定按同格）。
+export const GRID_COLS = 9;
+export const GRID_ROWS = 9;
 export const CELL_W = 12;
 export const CELL_H = 8;
 
@@ -101,51 +103,78 @@ export function gridCenter(col: number, row: number) {
   return { x: CELL_W / 2 + CELL_W * col, y: CELL_H / 2 + CELL_H * row };
 }
 
+// 3×3 区域：横轴 = 进攻方向（本方/中带/对方），纵轴 = 左/中/右
+export const ZONE_X = ['本方', '中带', '对方'] as const;
+export const ZONE_Y = ['左', '中', '右'] as const;
+
+export function zoneName(zx: number, zy: number) {
+  return `${ZONE_X[zx]}-${ZONE_Y[zy]}`;
+}
+
+export function zoneOf(col: number, row: number) {
+  return { zx: Math.min(2, Math.floor(col / 3)), zy: Math.min(2, Math.floor(row / 3)) };
+}
+
+// 格子 → 所属区域状态名
+export function zoneOfCell(col: number, row: number) {
+  const z = zoneOf(col, row);
+  return zoneName(z.zx, z.zy);
+}
+
+// 区域名 → 锚点格（区域中心），用于从区域状态反推参考坐标
+export function zoneAnchor(name: string) {
+  for (let zx = 0; zx < 3; zx++) {
+    for (let zy = 0; zy < 3; zy++) {
+      if (zoneName(zx, zy) === name) return { col: zx * 3 + 1, row: zy * 3 + 1 };
+    }
+  }
+  return { col: 4, row: 4 };
+}
+
 function positionGraph(): DomainGraph {
   const nodes: NE[] = [];
-  for (let r = 0; r < GRID_ROWS; r++) {
-    for (let c = 0; c < GRID_COLS; c++) {
-      const ctr = gridCenter(c, r);
+  for (let zy = 0; zy < 3; zy++) {
+    for (let zx = 0; zx < 3; zx++) {
       nodes.push({
-        name: gridName(c, r),
-        x: 90 + c * 92,
-        y: 80 + r * 78,
-        note: `网格点 中心坐标 (${ctr.x}, ${ctr.y})`,
+        name: zoneName(zx, zy),
+        x: 210 + zx * 300,
+        y: 110 + zy * 200,
+        note: `区域状态 = 格子 (${zx * 3}~${zx * 3 + 2}, ${zy * 3}~${zy * 3 + 2})；区域内移动不产生逻辑事件，仅跨区转移计入`,
       });
     }
   }
   const E: Array<Parameters<typeof makeGraph>[4][number]> = [];
-  // 移动：相邻网格点双向（普通移动速度）
-  for (let r = 0; r < GRID_ROWS; r++) {
-    for (let c = 0; c < GRID_COLS; c++) {
-      if (c + 1 < GRID_COLS) {
-        E.push({ event: '移动', from: gridName(c, r), to: gridName(c + 1, r), condition: '方向输入（每 tick 位移=移动基准速度）', basePriority: 1 });
-        E.push({ event: '移动', from: gridName(c + 1, r), to: gridName(c, r), condition: '方向输入（反向）', basePriority: 1 });
+  const Z = zoneName;
+  // 移动：相邻区域双向（区域内移动 = 底层坐标变化，不入图）
+  for (let zy = 0; zy < 3; zy++) {
+    for (let zx = 0; zx < 3; zx++) {
+      if (zx + 1 < 3) {
+        E.push({ event: '移动', from: Z(zx, zy), to: Z(zx + 1, zy), condition: '方向输入·跨区（同区域内移动为底层坐标变化，不产生逻辑事件）', basePriority: 1 });
+        E.push({ event: '移动', from: Z(zx + 1, zy), to: Z(zx, zy), condition: '方向输入·跨区（反向）', basePriority: 1 });
       }
-      if (r + 1 < GRID_ROWS) {
-        E.push({ event: '移动', from: gridName(c, r), to: gridName(c, r + 1), condition: '方向输入（纵向）', basePriority: 1 });
-        E.push({ event: '移动', from: gridName(c, r + 1), to: gridName(c, r), condition: '方向输入（纵向反向）', basePriority: 1 });
+      if (zy + 1 < 3) {
+        E.push({ event: '移动', from: Z(zx, zy), to: Z(zx, zy + 1), condition: '方向输入·跨区（纵向）', basePriority: 1 });
+        E.push({ event: '移动', from: Z(zx, zy + 1), to: Z(zx, zy), condition: '方向输入·跨区（纵向反向）', basePriority: 1 });
       }
-      // 冲刺：向进攻侧（+x）加速
-      if (c + 1 < GRID_COLS) {
-        E.push({ event: '冲刺', from: gridName(c, r), to: gridName(c + 1, r), condition: '冲刺键 且 体力>0', basePriority: 1 });
+      // 冲刺：向进攻侧（+x）跨区加速
+      if (zx + 1 < 3) {
+        E.push({ event: '冲刺', from: Z(zx, zy), to: Z(zx + 1, zy), condition: '冲刺键 且 体力>0（跨 1 区 ≈ 3 格）', basePriority: 1 });
       }
     }
   }
-  // 冲击技能（位移+伤害合并）：各职业不同（professionIds 限定）
-  for (let r = 0; r < GRID_ROWS; r++) {
-    // 前锋·射门爆发：从中线附近直插前场（跨 5 格）
-    E.push({ event: '射门爆发', from: gridName(2, r), to: gridName(7, r), condition: '前锋冲击技（距离 = 5 格 = 60m，1 格=12m）', skillKind: 'impact', skillId: 'sk_imp_3', professionIds: ['prof_fw'], basePriority: 2 });
-    E.push({ event: '射门爆发', from: gridName(4, r), to: gridName(9, r), condition: '前锋冲击技（距离 = 5 格 = 60m，1 格=12m）', skillKind: 'impact', skillId: 'sk_imp_3', professionIds: ['prof_fw'], basePriority: 2 });
-    // 中场·疾跑突进：跨 3 格
-    for (const c of [0, 3, 6]) {
-      E.push({ event: '疾跑突进', from: gridName(c, r), to: gridName(c + 3, r), condition: '中场冲击技（距离 = 3 格 = 36m，1 格=12m）', skillKind: 'impact', skillId: 'sk_imp_4', professionIds: ['prof_mf'], basePriority: 2 });
-    }
-    // 后卫·侧身闪避：斜向 1 格（防守回追）
-    if (r > 0) E.push({ event: '侧身闪避', from: gridName(8, r), to: gridName(7, r - 1), condition: '后卫冲击技（斜向 1 格 ≈ 15m，1 格=12m）', skillKind: 'impact', skillId: 'sk_imp_5', professionIds: ['prof_df'], basePriority: 2 });
-    if (r + 1 < GRID_ROWS) E.push({ event: '侧身闪避', from: gridName(8, r), to: gridName(7, r + 1), condition: '后卫冲击技（斜向 1 格 ≈ 15m，1 格=12m）', skillKind: 'impact', skillId: 'sk_imp_5', professionIds: ['prof_df'], basePriority: 2 });
+  // 冲击技能（位移+伤害合并）：区域级表达，位移按格折算（1 格 = 12m，与 9×9 网格同步）
+  for (let zy = 0; zy < 3; zy++) {
+    // 前锋·射门爆发：60m ≈ 5 格，横跨两区
+    E.push({ event: '射门爆发', from: Z(0, zy), to: Z(1, zy), condition: '前锋冲击技（位移 60m ≈ 5 格，横跨两区）', skillKind: 'impact', skillId: 'sk_imp_3', professionIds: ['prof_fw'], basePriority: 2 });
+    E.push({ event: '射门爆发', from: Z(1, zy), to: Z(2, zy), condition: '前锋冲击技（位移 60m ≈ 5 格，横跨两区）', skillKind: 'impact', skillId: 'sk_imp_3', professionIds: ['prof_fw'], basePriority: 2 });
+    // 中场·疾跑突进：36m ≈ 3 格 = 1 区
+    E.push({ event: '疾跑突进', from: Z(0, zy), to: Z(1, zy), condition: '中场冲击技（位移 36m ≈ 3 格 = 1 区）', skillKind: 'impact', skillId: 'sk_imp_4', professionIds: ['prof_mf'], basePriority: 2 });
+    E.push({ event: '疾跑突进', from: Z(1, zy), to: Z(2, zy), condition: '中场冲击技（位移 36m ≈ 3 格 = 1 区）', skillKind: 'impact', skillId: 'sk_imp_4', professionIds: ['prof_mf'], basePriority: 2 });
+    // 后卫·侧身闪避：12m ≈ 1 格，横向换道（防守回追）
+    if (zy > 0) E.push({ event: '侧身闪避', from: Z(2, zy), to: Z(2, zy - 1), condition: '后卫冲击技（斜向 12m ≈ 1 格，横向换道）', skillKind: 'impact', skillId: 'sk_imp_5', professionIds: ['prof_df'], basePriority: 2 });
+    if (zy + 1 < 3) E.push({ event: '侧身闪避', from: Z(2, zy), to: Z(2, zy + 1), condition: '后卫冲击技（斜向 12m ≈ 1 格，横向换道）', skillKind: 'impact', skillId: 'sk_imp_5', professionIds: ['prof_df'], basePriority: 2 });
   }
-  return makeGraph('position', 'player', '位置逻辑（10×10 网格）', nodes, E);
+  return makeGraph('position', 'player', '位置逻辑（9×9 网格 → 3×3 区域）', nodes, E);
 }
 
 // ---------- 姿态控制（挂角色）：自由 ⇄ 受控 ----------
@@ -233,28 +262,28 @@ const defaultSkills: SkillTemplate[] = [
   { id: 'sk_aux_1', name: '治疗喷雾', kind: 'aux', effectValue: 25, cooldown: 8, range: 3, note: '辅助类：恢复目标血量（效果值=25）' },
 ];
 
-// 默认 DFS 起点（多起点：接入位置与血量初始状态）
+// 默认 DFS 起点（多起点：接入位置与血量初始状态；位置 = 3×3 区域状态）
 export function defaultStartState(): Record<string, string> {
   return {
     possession: '无球',
     holding: '射门未激活',
-    position: '(2,4)',
+    position: '本方-中',
     control: '自由',
     hp: '血量≥50',
     ballTrack: '自由球',
   };
 }
 
-// 默认阵型：两队分居球场两侧（A 队左侧 0~3 列，B 队右侧 6~9 列）
+// 默认阵型：两队分居球场两侧（A 队 1~2 列，B 队 6~7 列，球在中心格 (4,4)）
 export function defaultFormation(players: PlayerSpec[]) {
   return players.map((p) => {
     const mates = players.filter((x) => x.team === p.team);
     const idx = mates.indexOf(p);
     const n = mates.length;
-    const col = p.team === 'A' ? 1 + (idx % 2) : 8 - (idx % 2);
-    const row = Math.round(((idx + 0.5) / n) * 9);
+    const col = p.team === 'A' ? 1 + (idx % 2) : GRID_COLS - 3 + (idx % 2);
+    const row = Math.round(((idx + 0.5) / n) * (GRID_ROWS - 1));
     return { id: p.id, col, row };
-  }).concat([{ id: 'ball', col: 4, row: 4 }]);
+  }).concat([{ id: 'ball', col: Math.floor(GRID_COLS / 2), row: Math.floor(GRID_ROWS / 2) }]);
 }
 
 export function createDefaultScenario(): Scenario {
@@ -263,7 +292,7 @@ export function createDefaultScenario(): Scenario {
   const players = buildRoster(3, defaultProfessions);
   return {
     id: newId(),
-    version: 8,
+    version: 9,
     name: '示例：3v3 标准赛',
     playersPerTeam: 3,
     professions: defaultProfessions.map((p) => ({ ...p })),

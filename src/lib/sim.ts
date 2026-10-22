@@ -8,12 +8,14 @@
 //   同一实体同一张图在同一 tick 触发多条边 = 同刻冲突，只执行权威排名最高的一条，其余计入抑制数。
 import type { PriorityResult } from './priority';
 import type { Scenario } from '@/types/model';
+import { metersToCells, zoneAnchor, zoneOfCell } from './defaultScenario';
 
 export interface EntityState {
   kind: 'player' | 'ball';
   name: string;
   professionId?: string;
-  states: Record<string, string>; // graphId -> 状态名
+  states: Record<string, string>; // graphId -> 状态名（position 图 = 3×3 区域名）
+  spot?: { col: number; row: number }; // 底层精确格子坐标（区域内移动不改逻辑状态，只改这里）
 }
 
 export interface SimEvent {
@@ -43,6 +45,7 @@ export interface SimState {
 }
 
 // 初始状态：按方案阵型摆位（两队分居两侧），其余图取 startState
+// position 图的逻辑状态 = 格子所属 3×3 区域；底层精确坐标保留在 spot 里
 export function initSim(sc: Scenario): SimState {
   const spotOf = (id: string) => sc.formation?.find((f) => f.id === id);
   const entities: EntityState[] = sc.players.map((p) => {
@@ -51,16 +54,23 @@ export function initSim(sc: Scenario): SimState {
       kind: 'player',
       name: p.name,
       professionId: p.professionId,
+      spot: spot ? { col: spot.col, row: spot.row } : undefined,
       states: {
         possession: sc.startState?.possession ?? '无球',
         holding: sc.startState?.holding ?? '射门未激活',
-        position: spot ? `(${spot.col},${spot.row})` : (sc.startState?.position ?? '(2,4)'),
+        position: spot ? zoneOfCell(spot.col, spot.row) : (sc.startState?.position ?? '本方-中'),
         control: sc.startState?.control ?? '自由',
         hp: sc.startState?.hp ?? '血量≥50',
       },
     };
   });
-  entities.push({ kind: 'ball', name: '球', states: { ballTrack: sc.startState?.ballTrack ?? '自由球' } });
+  const ballSpot = spotOf('ball');
+  entities.push({
+    kind: 'ball',
+    name: '球',
+    spot: ballSpot ? { col: ballSpot.col, row: ballSpot.row } : { col: 4, row: 4 },
+    states: { ballTrack: sc.startState?.ballTrack ?? '自由球' },
+  });
   return {
     entities,
     stats: { tick: 0, fired: {}, suppressed: {}, queued: {}, cycleTrap: {}, log: [], contradiction: [] },
@@ -86,6 +96,11 @@ export function stepSim(
   const rankOf = new Map<string, number>();
   for (const s of result.scores) rankOf.set(s.edge.id, s.rank);
 
+  // 冲击命中队列：位置重合（同格）时对敌队造成的伤害，实体循环结束后统一结算
+  const hits: Array<{ name: string; by: string; dmg: number }> = [];
+  const teamOf = (name: string) => sc.players.find((p) => p.name === name)?.team;
+  const clamp = (v: number) => Math.max(0, Math.min(8, v));
+
   // 冷却表：edgeId -> 剩余 tick（跨实体独立冷却）
   const cds = (state as unknown as { __cds?: Record<string, number> }).__cds ?? {};
 
@@ -96,6 +111,7 @@ export function stepSim(
 
   const entities = state.entities.map((ent) => {
     const states = { ...ent.states };
+    let newSpot: { col: number; row: number } | undefined; // 本 tick 执行事件后的新格子坐标
     // 跨图状态前提：事件要求该实体在另一张图上处于/不处于某状态（条件的一部分）
     const preOk = (e: { preStates?: { graph: string; state: string; not?: boolean }[] }) =>
       !(e.preStates ?? []).some((p) => {
@@ -155,10 +171,56 @@ export function stepSim(
       const win = triggered[0];
       const toNode = g.nodes.find((n) => n.id === win.to);
       if (!toNode) continue;
-      states[gid] = toNode.name;
+      // ---- 执行语义：位置图先移动底层格子坐标，逻辑状态 = 目标格所属 3×3 区域 ----
+      let toName = toNode.name;
+      if (ent.kind === 'player' && gid === 'position') {
+        const prev = ent.spot ?? zoneAnchor(curName);
+        const ballSpot = state.entities.find((x) => x.kind === 'ball')?.spot ?? { col: 4, row: 4 };
+        const dir = teamOf(ent.name) === 'B' ? -1 : 1; // 进攻方向：A 队向右，B 队向左
+        const sk = win.skillId ? sc.skills.find((s) => s.id === win.skillId) : undefined;
+        let nc = prev.col, nr = prev.row;
+        if (sk && (sk.displacement ?? 0) > 0) {
+          // 冲击位移：按技能距离参数折合格数，朝进攻方向
+          nc = clamp(prev.col + dir * Math.max(1, Math.round(metersToCells(sk.displacement!))));
+        } else if (win.event === '冲刺') {
+          nc = clamp(prev.col + 2 * dir); // 冲刺 = 跨 1 区 ≈ 3 格
+        } else if (win.event === '移动') {
+          // 普通移动：朝球追 1 格（跨区时才体现为逻辑事件）
+          nc = clamp(prev.col + Math.sign(ballSpot.col - prev.col));
+          nr = clamp(prev.row + Math.sign(ballSpot.row - prev.row));
+        }
+        newSpot = { col: nc, row: nr };
+        toName = zoneOfCell(nc, nr); // 权威逻辑状态以坐标派生为准
+      } else if (ent.kind === 'ball' && gid === 'ballTrack') {
+        // 球路：传出后逐 tick 移向队友；掉球滚向中心；被拿则吸附到持球人脚下
+        const prev = ent.spot ?? { col: 4, row: 4 };
+        const d2 = (x: { spot?: { col: number; row: number } }) =>
+          x.spot ? (x.spot.col - prev.col) ** 2 + (x.spot.row - prev.row) ** 2 : Infinity;
+        const mates = state.entities.filter((x) => x.kind === 'player');
+        const near = mates.length ? mates.reduce((a, b) => (d2(a) <= d2(b) ? a : b)) : undefined;
+        if (win.event === '球移向队友' && near?.spot) {
+          newSpot = { col: clamp(prev.col + Math.sign(near.spot.col - prev.col)), row: clamp(prev.row + Math.sign(near.spot.row - prev.row)) };
+        } else if (win.event === '滚向中心') {
+          newSpot = { col: clamp(prev.col + Math.sign(4 - prev.col)), row: clamp(prev.row + Math.sign(4 - prev.row)) };
+        } else if (win.event === '拿球' && near?.spot) {
+          newSpot = { col: near.spot.col, row: near.spot.row };
+        }
+      }
+      states[gid] = toName;
+      // 冲击伤害判定：默认双方位置状态重合（同一格）才能对敌队造成伤害
+      const winSkill = win.skillId ? sc.skills.find((s) => s.id === win.skillId) : undefined;
+      if (win.skillKind === 'impact' && (winSkill?.damage ?? 0) > 0 && ent.kind === 'player' && ent.spot) {
+        for (const other of state.entities) {
+          if (other.kind !== 'player' || other.name === ent.name) continue;
+          if (teamOf(other.name) === teamOf(ent.name)) continue;
+          if (other.spot && other.spot.col === ent.spot.col && other.spot.row === ent.spot.row) {
+            hits.push({ name: other.name, by: ent.name, dmg: winSkill!.damage! });
+          }
+        }
+      }
       if (win.params.cooldown > 0) cds[win.id] = win.params.cooldown;
       fired[win.event] = (fired[win.event] ?? 0) + 1;
-      log.push({ tick, entity: ent.name, graphId: gid, event: win.event, from: curName, to: toNode.name, outcome: 'executed' });
+      log.push({ tick, entity: ent.name, graphId: gid, event: win.event, from: curName, to: toName, outcome: 'executed' });
       for (const lose of triggered.slice(1)) {
         suppressed[lose.event] = (suppressed[lose.event] ?? 0) + 1;
         log.push({ tick, entity: ent.name, graphId: gid, event: lose.event, from: curName, to: g.nodes.find((n) => n.id === lose.to)?.name ?? '?', outcome: 'suppressed', reason: `同刻冲突输给「${win.event}」（权威名次 #${rankOf.get(win.id)}）` });
@@ -177,8 +239,25 @@ export function stepSim(
         }
       }
     }
-    return { ...ent, states };
+    return { ...ent, states, spot: newSpot ?? ent.spot };
   });
+
+  // 冲击伤害结算：同格敌队玩家血量状态跌落（阈值状态机；数值加减血见平衡面板建议）
+  for (const h of hits) {
+    const target = entities.find((x) => x.name === h.name);
+    if (!target?.states.hp) continue;
+    const fromHp = target.states.hp;
+    log.push({
+      tick, entity: h.name, graphId: 'hp', event: '受击', from: fromHp,
+      to: fromHp === '血量<50' ? '血量<50' : '血量<50',
+      outcome: 'executed',
+      reason: `与 ${h.by} 位置重合（同一格）触发冲击伤害 ${h.dmg}${fromHp === '血量<50' ? '（血量进一步扣减）' : ''}`,
+    });
+    if (fromHp !== '血量<50') {
+      target.states.hp = '血量<50';
+      fired['受击'] = (fired['受击'] ?? 0) + 1;
+    }
+  }
 
   // 短环滞留检测：实体在任一图内连续 K tick 于少于 tau 个状态间打转
   const prevStates = (state as unknown as { __hist?: Record<string, string[]> }).__hist ?? {};

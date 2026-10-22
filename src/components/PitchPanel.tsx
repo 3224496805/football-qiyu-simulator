@@ -1,8 +1,8 @@
-// 多人位置联合状态视图：小球场 + 10×10 网格，把每名角色和球标注在网格点上
-// 多人位置联合状态 = (角色1格, 角色2格, …, 球格) 的组合
+// 多人位置联合状态视图：小球场 + 9×9 网格（3×3 区域叠加层），把每名角色和球标注在网格点上
+// 多人位置联合状态 = (角色1区域, 角色2区域, …, 球格) 的组合；底层精确坐标保留，逻辑状态 = 3×3 区域
 import { useMemo, useRef, useState } from 'react';
 import type { Scenario } from '@/types/model';
-import { GRID_COLS, GRID_ROWS, gridCenter } from '@/lib/defaultScenario';
+import { GRID_COLS, GRID_ROWS, ZONE_X, ZONE_Y, gridCenter, zoneOfCell } from '@/lib/defaultScenario';
 
 const PITCH_W = 720;      // 球场像素宽
 const PITCH_H = 480;      // 球场像素高
@@ -43,7 +43,7 @@ export default function PitchPanel({ scenario, onChange }: Props) {
         row: Math.round(((teamIdx + 0.5) / n) * (GRID_ROWS - 1)),
       };
     });
-    list.push({ id: 'ball', col: Math.floor(GRID_COLS / 2) - 1, row: Math.floor(GRID_ROWS / 2) });
+    list.push({ id: 'ball', col: Math.floor(GRID_COLS / 2), row: Math.floor(GRID_ROWS / 2) });
     return list;
   }, [scenario]);
 
@@ -61,13 +61,15 @@ export default function PitchPanel({ scenario, onChange }: Props) {
   const profOf = (p: { professionId: string }) =>
     scenario.professions.find((x) => x.id === p.professionId)?.name ?? '';
 
-  const jointCount = Math.pow(GRID_COLS * GRID_ROWS, scenario.players.length + 1);
+  const cellCount = GRID_COLS * GRID_ROWS;
+  const jointCount = Math.pow(cellCount, scenario.players.length + 1);
 
   return (
     <div className="p-4 space-y-4">
       <div className="text-sm text-muted-foreground">
-        多人位置联合状态 = 每名角色所在网格点 + 球所在网格点的组合。
-        当前 {scenario.players.length} 名角色 + 1 球，每格 10×10=100 种取值 → 联合状态数 = 100^{scenario.players.length + 1} = <b className="text-foreground">{jointCount.toExponential(2)}</b>。
+        多人位置联合状态 = 每名角色所在 3×3 区域 + 球所在网格点的组合（底层精确坐标保留在格子上）。
+        当前 {scenario.players.length} 名角色 + 1 球，每格 9×9=81 种取值 → 精确联合状态数 = 81^{scenario.players.length + 1} = <b className="text-foreground">{jointCount.toExponential(2)}</b>；
+        压缩为区域逻辑状态后（每实体 3×3=9 种）→ 区域联合状态数 = <b className="text-foreground">{Math.pow(9, scenario.players.length + 1).toExponential(2)}</b>。
         拖拽球员/球到任意格子（吸附到网格点），即指定当前联合位置状态。
       </div>
 
@@ -92,6 +94,24 @@ export default function PitchPanel({ scenario, onChange }: Props) {
             <line key={`h${y}`} x1={MARGIN} y1={y} x2={PITCH_W - MARGIN} y2={y} stroke="#ffffff" strokeWidth={0.4} opacity={0.35} />
           ))}
 
+          {/* 3×3 区域叠加层：每 3 格粗线 + 区域名标注 */}
+          {[0, 3, 6, 9].map((i) => (
+            <g key={`z${i}`}>
+              <line x1={MARGIN + i * cellW} y1={MARGIN} x2={MARGIN + i * cellW} y2={PITCH_H - MARGIN} stroke="#fbbf24" strokeWidth={i === 0 || i === 9 ? 0 : 1.6} opacity={i === 0 || i === 9 ? 0 : 0.7} />
+              <line x1={MARGIN} y1={MARGIN + i * cellH} x2={PITCH_W - MARGIN} y2={MARGIN + i * cellH} stroke="#fbbf24" strokeWidth={i === 0 || i === 9 ? 0 : 1.6} opacity={i === 0 || i === 9 ? 0 : 0.7} />
+            </g>
+          ))}
+          {[0, 1, 2].map((zx) => [0, 1, 2].map((zy) => {
+            const zxName = ZONE_X[zx], zyName = ZONE_Y[zy];
+            const cx = MARGIN + (zx * 3 + 0.5) * cellW + cellW; // 区域中心
+            const cy = MARGIN + (zy * 3 + 0.5) * cellH + cellH;
+            return (
+              <text key={`zl${zx}-${zy}`} x={cx} y={cy} textAnchor="middle" fontSize={11} fontWeight={700} fill="#fde68a" opacity={0.85} className="pointer-events-none select-none">
+                {zxName}-{zyName}
+              </text>
+            );
+          }))}
+
           {/* 实体位置 */}
           {spots.map((s) => {
             const p = toPx(s.col, s.row);
@@ -99,7 +119,7 @@ export default function PitchPanel({ scenario, onChange }: Props) {
               return (
                 <g key="ball" onMouseDown={(e) => { e.stopPropagation(); setDragId('ball'); }} className="cursor-grab active:cursor-grabbing">
                   <circle cx={p.x} cy={p.y} r={9} fill="#fbbf24" stroke="#78350f" strokeWidth={1.5} />
-                  <title>球 @ ({s.col},{s.row}) 坐标 {gridCenter(s.col, s.row).x},{gridCenter(s.col, s.row).y}</title>
+                  <title>球 @ 网格 ({s.col},{s.row}) · 区域 {zoneOfCell(s.col, s.row)} · 坐标 {gridCenter(s.col, s.row).x},{gridCenter(s.col, s.row).y}</title>
                 </g>
               );
             }
@@ -115,7 +135,7 @@ export default function PitchPanel({ scenario, onChange }: Props) {
                 <text x={p.x} y={p.y - 20} textAnchor="middle" fontSize={9} fill={colr} className="pointer-events-none select-none">
                   {pl.name}·{profOf(pl)}
                 </text>
-                <title>{pl.name}（{profOf(pl)}）@ 网格 ({s.col},{s.row})，坐标 {gridCenter(s.col, s.row).x},{gridCenter(s.col, s.row).y}</title>
+                <title>{pl.name}（{profOf(pl)}）@ 网格 ({s.col},{s.row}) · 区域 {zoneOfCell(s.col, s.row)} · 坐标 {gridCenter(s.col, s.row).x},{gridCenter(s.col, s.row).y}</title>
               </g>
             );
           })}
@@ -126,13 +146,13 @@ export default function PitchPanel({ scenario, onChange }: Props) {
         <h4 className="font-bold mb-2">当前联合位置状态</h4>
         <ul className="text-xs space-y-0.5">
           {spots.map((s) => {
-            if (s.id === 'ball') return <li key={s.id}>⚽ 球 → 网格 ({s.col},{s.row})</li>;
+            if (s.id === 'ball') return <li key={s.id}>⚽ 球 → 网格 ({s.col},{s.row}) · 区域 {zoneOfCell(s.col, s.row)}</li>;
             const pl = playerOf(s.id);
-            return <li key={s.id}>{pl?.team === 'A' ? '🔴' : '🔵'} {pl?.name}（{profOf(pl!)}）→ 网格 ({s.col},{s.row})</li>;
+            return <li key={s.id}>{pl?.team === 'A' ? '🔴' : '🔵'} {pl?.name}（{profOf(pl!)}）→ 网格 ({s.col},{s.row}) · 区域 {zoneOfCell(s.col, s.row)}</li>;
           })}
         </ul>
         <p className="text-xs text-muted-foreground mt-2">
-          这只是联合状态空间中的一个点；完整的 10×10 网格位置逻辑图（含移动/冲刺/位移技能事件）见「图编辑 → 位置逻辑」，
+          这只是联合状态空间中的一个点；位置逻辑图以 3×3 区域为状态（9×9 网格底层坐标，含移动/冲刺/位移技能事件，区域内移动不产生逻辑事件）见「图编辑 → 位置逻辑」，
           其优先级由总超图 DFS 统一裁决（见「优先级计算」）。
         </p>
       </div>

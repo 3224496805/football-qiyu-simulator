@@ -1,6 +1,6 @@
 // localStorage 持久化：多方案隔离存储 + JSON 导入导出
 import type { Scenario } from '@/types/model';
-import { buildRoster, createDefaultScenario } from './defaultScenario';
+import { buildRoster, createDefaultScenario, defaultFormation } from './defaultScenario';
 
 const INDEX_KEY = 'qiyu:scenarios:index';
 const PREFIX = 'qiyu:scenario:';
@@ -34,16 +34,23 @@ export function loadScenario(id: string): Scenario | null {
 // 存量迁移：旧版本 → v6（3v3 方案按手绘设计图重构 + 信号/辅助技能 + 时限状态）
 // v5→v6：重建标准逻辑图（possession/holding/control/hp/ballTrack），保留位置图、用户自建图与自定义技能模板。
 // <v5：整体用 v6 默认结构重建，保留方案名称/人数/平衡参数。
-// 存量迁移：旧版本 → v8（冲击技能合并 + 跨图前提 + 多起点 DFS + 新规则图）
-// v7→v8：重建标准逻辑图（规则更新），保留位置图/自建图/自定义模板；伤害/位移模板合并为冲击。
-// <v7：整体用 v8 默认结构重建，保留方案名称/人数/平衡参数。
+// v6→v8（合并执行）：冲击技能合并 + 跨图前提 + 多起点 DFS + 新规则图。
+// v8→v9：位置图压缩为 9×9 网格 + 3×3 区域状态（DFS 只跑区域级转移），起点/阵型重置。
 function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
-  if (v >= 8) return sc;
+  if (v >= 9) return sc;
+  if (v >= 8) {
+    // v8→v9：仅替换位置图为区域版，其余图/模板保留；起点与阵型重置为区域语义
+    sc.graphs['position'] = fresh.graphs['position'];
+    sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
+    sc.formation = defaultFormation(sc.players);
+    sc.version = 9;
+    return sc;
+  }
   if (v >= 5) {
-    const standard = ['possession', 'holding', 'control', 'hp', 'ballTrack'];
+    const standard = ['possession', 'holding', 'control', 'hp', 'ballTrack', 'position'];
     for (const gid of standard) delete sc.graphs[gid];
     for (const [gid, g] of Object.entries(fresh.graphs)) {
       if (!sc.graphs[gid]) sc.graphs[gid] = g;
@@ -55,12 +62,12 @@ function migrate(sc: Scenario): Scenario {
       .map((s) => ({ ...s, kind: (kindMap[s.kind] ?? s.kind) as typeof s.kind }));
     sc.skills = [...fresh.skills, ...customs];
     sc.balance.hpRegen ??= 5;
-    sc.startState ??= fresh.startState;
-    sc.formation ??= fresh.formation;
-    sc.version = 8;
+    sc.startState = fresh.startState;
+    sc.formation = defaultFormation(sc.players);
+    sc.version = 9;
     return sc;
   }
-  sc.version = 8;
+  sc.version = 9;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

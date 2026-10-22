@@ -222,7 +222,7 @@ export default function Home() {
                         {g.nodes.map((n) => <option key={n.id} value={n.name}>{n.name}</option>)}
                       </select>
                     ) : (
-                      <input className="border rounded px-1 py-0.5 w-16 bg-background" placeholder="如 (2,4)"
+                      <input className="border rounded px-1 py-0.5 w-16 bg-background" placeholder="如 本方-中"
                         value={scenario.startState?.[g.id] ?? ''}
                         onChange={(e) => setScenario({ ...scenario, startState: { ...scenario.startState, [g.id]: e.target.value } })} />
                     )}

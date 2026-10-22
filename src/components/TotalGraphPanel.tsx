@@ -112,9 +112,9 @@ export default function TotalGraphPanel({ scenario, result }: Props) {
           </ul>
           <h4 className="font-bold mb-2 mt-4">复合结构（compose：状态叠加，互不影响）</h4>
           <p className="text-muted-foreground">
-            每个角色的总状态 = 球权 × 位置(网格) × 姿态 × 血量 四个维度叠加；球实体独立拥有球路逻辑。
+            每个角色的总状态 = 球权 × 位置(3×3 区域) × 姿态 × 血量 四个维度叠加；球实体独立拥有球路逻辑。
             当前方案 {scenario.playersPerTeam}v{scenario.playersPerTeam}（{scenario.players.length} 角色 + 1 球）。
-            多人位置联合状态数 = |网格|^角色数 = 100^{scenario.players.length}（10×10 网格；完整状态空间还要 × 其他维度）。
+            多人位置联合状态数 = |区域|^角色数 = 9^{scenario.players.length}（9×9 网格压缩为 3×3 区域；完整状态空间还要 × 其他维度）。
             图替换式复合的可视化见「复合预览」标签页。
           </p>
         </div>
