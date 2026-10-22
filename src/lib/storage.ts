@@ -42,7 +42,20 @@ function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
-  if (v >= 13) return sc;
+  if (v >= 14) return sc;
+  if (v >= 13) {
+    // v13→v14：掉球改为纯条件触发（被动监听受击 + 低血量数值门槛）；血量受击移除"持球免伤"前提
+    const pos = sc.graphs['possession'];
+    if (pos?.edges.find((e) => e.event === '掉球')?.trigger !== 'passive') {
+      sc.graphs['possession'] = fresh.graphs['possession'];
+    }
+    const hp = sc.graphs['hp'];
+    if (hp?.edges.find((e) => e.event === '受击')?.preStates?.length) {
+      sc.graphs['hp'] = fresh.graphs['hp'];
+    }
+    sc.version = 14;
+    return sc;
+  }
   if (v >= 12) {
     // v12→v13：掉球/受击掉球合并为一条双通道边（主动+监听受击）
     const pos = sc.graphs['possession'];
@@ -50,7 +63,7 @@ function migrate(sc: Scenario): Scenario {
       sc.graphs['possession'] = fresh.graphs['possession'];
       sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
     }
-    sc.version = 13;
+    sc.version = 14;
     return sc;
   }
   if (v >= 11) {
@@ -80,14 +93,14 @@ function migrate(sc: Scenario): Scenario {
       const sig = fresh.skills.find((s) => s.id === 'sk_sig_2');
       if (sig) sc.skills = [...sc.skills, sig];
     }
-    sc.version = 13;
+    sc.version = 14;
     return sc;
   }
   if (v >= 10) {
     // v10→v11：替换球权/球路图，其余图/模板保留
     sc.graphs['possession'] = fresh.graphs['possession'];
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
-    sc.version = 13;
+    sc.version = 14;
     return sc;
   }
   if (v >= 9) {
@@ -95,7 +108,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['hp'] = fresh.graphs['hp'];
     sc.graphs['possession'] = fresh.graphs['possession'];
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
-    sc.version = 13;
+    sc.version = 14;
     return sc;
   }
   if (v >= 8) {
@@ -106,7 +119,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
     sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
     sc.formation = defaultFormation(sc.players);
-    sc.version = 13;
+    sc.version = 14;
     return sc;
   }
   if (v >= 5) {
@@ -124,10 +137,10 @@ function migrate(sc: Scenario): Scenario {
     sc.balance.hpRegen ??= 5;
     sc.startState = fresh.startState;
     sc.formation = defaultFormation(sc.players);
-    sc.version = 13;
+    sc.version = 14;
     return sc;
   }
-  sc.version = 13;
+  sc.version = 14;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

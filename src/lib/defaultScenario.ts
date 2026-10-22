@@ -56,7 +56,7 @@ function possessionGraph(): DomainGraph {
   ], [
     { event: '拿球', from: '无球', to: '持球', condition: '拿球距离前提：与球相距 ≤ 2 格（球处于「传向队友」追踪 或 「自由球」滚动中）才触发；传球本身不会直接把接球方变成持球', isHyper: true, basePriority: 3 },
     { event: '传球', from: '持球', to: '无球', condition: '【信号技能·传球引导】按下传球键选定队友目标并传出信号，确认后执行：本质 = 持球→无球结束本方球权，球进入「传向队友」朝随机一个队友追踪，队友在距离前提满足时自行拿球', skillKind: 'signal', skillId: 'sk_sig_2', isHyper: true, basePriority: 7, structWeight: 1.2 },
-    { event: '掉球', from: '持球', to: '无球', condition: '被断球、血量低于掉球阈值（主动），或受击后血量跌破阈值（被动监听受击）；球直接成为自由球朝地图中心运动', isHyper: true, basePriority: 6, trigger: 'active', listenEvents: ['受击'] },
+    { event: '掉球', from: '持球', to: '无球', condition: '【被动·条件触发，无主动触发】受击结算后血量数值低于掉球阈值（hpDropThreshold）才触发（被断球 = 冲击伤害→低血量→掉球级联）；球直接成为自由球朝地图中心运动', isHyper: true, basePriority: 6, trigger: 'passive', listenEvents: ['受击'] },
   ]);
 }
 
@@ -198,10 +198,8 @@ function hpGraph(): DomainGraph {
     { name: '血量≥50', x: 200, y: 140, note: '阈值复合状态：内部血量子状态（数值 50~100），数值更新不退出状态' },
     { name: '血量<50', x: 520, y: 330, note: '阈值复合状态：内部血量子状态（数值 0~49）；回血是其内部更新事件，数值回到 ≥50 才经「恢复」退出' },
   ], [
-    { event: '受击', from: '血量≥50', to: '血量<50', condition: '【前提】双方位置状态重合（同一格）才能造成伤害；数值扣减后 <50（跨阈值进入复合状态）', skillKind: 'impact', affectsOthers: true, basePriority: 2,
-      preStates: [{ graph: 'possession', state: '持球', not: true }] },
-    { event: '受击', from: '血量<50', to: '血量<50', condition: '复合状态内部更新：数值进一步扣减，仍 <50（不退出复合状态）', skillKind: 'impact', affectsOthers: true, basePriority: 2,
-      preStates: [{ graph: 'possession', state: '持球', not: true }] },
+    { event: '受击', from: '血量≥50', to: '血量<50', condition: '【前提】双方位置状态重合（同一格）才能造成伤害；数值扣减后 <50（跨阈值进入复合状态）。持球时无回血事件，但伤害照常结算（低血量是掉球条件）', skillKind: 'impact', affectsOthers: true, basePriority: 2 },
+    { event: '受击', from: '血量<50', to: '血量<50', condition: '复合状态内部更新：双方同格造成伤害，数值进一步扣减，仍 <50（不退出复合状态）；掉球阈值判定时若低于 hpDropThreshold 则级联触发球权「掉球」', skillKind: 'impact', affectsOthers: true, basePriority: 2 },
     { event: '回血', from: '血量<50', to: '血量<50', condition: '【复合内部】无球状态下每次判定固定回复少量血量（全局参数 hpRegen），数值仍 <50 时不退出复合状态', skillKind: 'aux', skillId: 'sk_aux_1', basePriority: 1,
       preStates: [{ graph: 'possession', state: '无球' }] },
     { event: '恢复', from: '血量<50', to: '血量≥50', condition: '【被动】回血累积使数值跨回 ≥50：退出复合状态（监听回血，于下一次判定执行）', skillKind: 'aux', skillId: 'sk_aux_1', basePriority: 1,
@@ -305,7 +303,7 @@ export function createDefaultScenario(): Scenario {
   const players = buildRoster(3, defaultProfessions);
   return {
     id: newId(),
-    version: 13,
+    version: 14,
     name: '示例：3v3 标准赛',
     playersPerTeam: 3,
     professions: defaultProfessions.map((p) => ({ ...p })),

@@ -233,6 +233,14 @@ export function stepSim(
           continue;
         }
       }
+      // ---- 掉球条件触发：无主动触发，受击级联后须血量数值低于掉球阈值 ----
+      if (ent.kind === 'player' && gid === 'possession' && win.event === '掉球') {
+        const hp = ent.hpValue ?? sc.balance.hpMax;
+        if (hp >= sc.balance.hpDropThreshold) {
+          log.push({ tick, entity: ent.name, graphId: gid, event: '掉球', from: curName, to: toName, outcome: 'missed', reason: `掉球条件不满足：血量 ${hp} 未低于掉球阈值 ${sc.balance.hpDropThreshold}` });
+          continue;
+        }
+      }
       // ---- 血量图：阈值复合状态 = 内部血量子状态（数值）；事件更新数值，状态按阈值派生 ----
       if (ent.kind === 'player' && gid === 'hp') {
         const hpMax = sc.balance.hpMax;
