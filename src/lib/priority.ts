@@ -393,6 +393,34 @@ export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
     }
   }
 
+  // 时限状态校验：到期事件未绑定出边 / 时限 tick 不合理的
+  for (const g of Object.values(sc.graphs)) {
+    for (const n of g.nodes) {
+      if (!n.timeLimit) continue;
+      const outEdges = g.edges.filter((e) => e.from === n.id);
+      const hit = n.timeLimit.timeoutEvent
+        ? outEdges.find((e) => e.event === n.timeLimit!.timeoutEvent)
+        : undefined;
+      if (!hit) {
+        out.push({
+          target: `状态「${n.name}」（${g.name}）`,
+          kind: '参数平衡',
+          advice: n.timeLimit.timeoutEvent
+            ? `时限 ${n.timeLimit.ticks} tick，但到期事件「${n.timeLimit.timeoutEvent}」不在其出边中；请补一条同名出边或在状态编辑中重新指定`
+            : `时限 ${n.timeLimit.ticks} tick，但未指定到期触发事件；请在状态编辑（双击状态）中指定一条出边`,
+          expect: '时限状态到期后自动流转，不会卡死在临时状态',
+        });
+      } else if (n.timeLimit.ticks <= 0) {
+        out.push({
+          target: `状态「${n.name}」（${g.name}）`,
+          kind: '参数平衡',
+          advice: '时限 tick 应 ≥ 1，否则每 tick 都触发到期事件',
+          expect: '临时状态有合理的停留时间',
+        });
+      }
+    }
+  }
+
   // 参数平衡：结合全局平衡参数
   const b = sc.balance;
   const seenDmg = new Set<string>();
@@ -412,7 +440,7 @@ export function suggest(sc: Scenario, result: PriorityResult): Suggestion[] {
       out.push({
         target: `位移事件「${s.edge.event}」`,
         kind: '参数平衡',
-        advice: `当前位移基准 ${b.displacement}m；位移距离影响位置逻辑图的流转速度，过大会缩短位置状态停留时间`,
+        advice: `当前位移基准 ${b.displacement}m（≈ ${+(b.displacement / 12).toFixed(1)} 格，1 格=12m）；位移距离影响位置逻辑图的流转速度，过大会缩短位置状态停留时间`,
         expect: '位置状态图节奏与球逻辑图更同步',
       });
     }

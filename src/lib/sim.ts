@@ -51,13 +51,14 @@ export function initSim(sc: Scenario): SimState {
       professionId: p.professionId,
       states: {
         possession: '无球',
+        holding: '射门未激活',
         position: `(${p.team === 'A' ? 2 : 7},${Math.round(((idx + 0.5) / n) * 9)})`,
         control: '自由',
-        hp: '健康',
+        hp: '血量≥50',
       },
     };
   });
-  entities.push({ kind: 'ball', name: '球', states: { ballTrack: '自由' } });
+  entities.push({ kind: 'ball', name: '球', states: { ballTrack: '自由球' } });
   return {
     entities,
     stats: { tick: 0, fired: {}, suppressed: {}, cycleTrap: {}, log: [], contradiction: [] },

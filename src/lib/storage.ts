@@ -31,27 +31,33 @@ export function loadScenario(id: string): Scenario | null {
   }
 }
 
-// 存量迁移：旧版本 → v4（逻辑图可自由增删 + 10×10 网格 + 权威=总超图 DFS）
-// 逻辑图结构（owner/id 字段）与网格密度发生变化，旧逻辑图整体用 v4 默认结构重建，
-// 保留方案名称/人数/平衡参数/技能模板/职业名册。
+// 存量迁移：旧版本 → v6（3v3 方案按手绘设计图重构 + 信号/辅助技能 + 时限状态）
+// v5→v6：重建标准逻辑图（possession/holding/control/hp/ballTrack），保留位置图、用户自建图与自定义技能模板。
+// <v5：整体用 v6 默认结构重建，保留方案名称/人数/平衡参数。
 function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
-  if ((sc.version ?? 1) >= 4) {
-    // v4 内补字段容错
-    sc.professions ??= fresh.professions;
-    sc.players ??= buildRoster(sc.playersPerTeam || 3, sc.professions);
-    for (const [gid, g] of Object.entries(sc.graphs)) {
-      g.id ??= gid;
-      g.owner ??= gid === 'ballTrack' ? 'ball' : 'player';
-      g.name ??= gid;
+  const v = sc.version ?? 1;
+  if (v >= 6) return sc;
+  if (v >= 5) {
+    const standard = ['possession', 'holding', 'control', 'hp', 'ballTrack'];
+    for (const gid of standard) delete sc.graphs[gid];
+    for (const [gid, g] of Object.entries(fresh.graphs)) {
+      if (!sc.graphs[gid]) sc.graphs[gid] = g;
     }
+    // 保留自定义技能模板，补入默认的信号/辅助模板
+    const customs = (sc.skills ?? []).filter(
+      (s) => !fresh.skills.some((f) => f.name === s.name && f.kind === s.kind),
+    );
+    sc.skills = [...fresh.skills, ...customs];
+    sc.version = 6;
     return sc;
   }
-  sc.version = 4;
+  sc.version = 6;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);
+  sc.skills = fresh.skills;
   return sc;
 }
 

@@ -241,7 +241,9 @@ export default function Home() {
       <EdgeDialog edge={editingEdge} fromName={editingFrom} toName={editingTo}
         skills={scenario.skills} professions={scenario.professions}
         showProfessions={graph.owner === 'player'}
-        onSave={updateEdge} onClose={() => setEditingEdgeId(null)} />
+        onSave={updateEdge}
+        onSkillsChange={(skills) => setScenario({ ...scenario, skills })}
+        onClose={() => setEditingEdgeId(null)} />
     </div>
   );
 }

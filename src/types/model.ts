@@ -17,9 +17,17 @@ export interface StateNode {
   x: number; // 画布坐标
   y: number;
   note?: string;
+  timeLimit?: { ticks: number; timeoutEvent?: string }; // 时限状态：进入 ticks 后自动触发 timeoutEvent 出边；缺省 = 无限状态
 }
 
-export type SkillKind = 'damage' | 'displacement';
+export type SkillKind = 'damage' | 'displacement' | 'signal' | 'aux';
+
+export const SKILL_KIND_NAMES: Record<SkillKind, string> = {
+  damage: '伤害',
+  displacement: '位移',
+  signal: '信号',
+  aux: '辅助',
+};
 
 export interface EventParams {
   basePriority: number;  // 手动基础优先级
@@ -32,8 +40,9 @@ export interface DomainEdge {
   event: string;        // 事件名
   from: string;         // StateNode.id
   to: string;
-  condition: string;    // 条件（千星沙盒事件节点给出）
-  skillKind?: SkillKind; // 技能模板类型（未接入游戏，仅模板）
+  condition: string;    // 状态前提（千星沙盒事件节点给出）
+  skillKind?: SkillKind; // 主动技能类型
+  skillId?: string;   // 绑定的技能模板 id（事件 = 状态变化 + 状态前提 + 主动技能）
   isHyper: boolean;     // 多实体联合事件（超边）
   affectsOthers: boolean; // 是否影响其他实体
   professionIds?: string[]; // 仅限这些职业拥有该事件；空/undefined = 全职业通用
@@ -54,6 +63,8 @@ export interface SkillTemplate {
   kind: SkillKind;
   damage?: number;       // 伤害大小
   displacement?: number; // 位移距离
+  chargeMax?: number;    // 信号类：蓄能上限（如蓄力 0~100）
+  effectValue?: number;  // 辅助类：效果值（如治疗量/护盾值）
   cooldown: number;
   range?: number;
   note?: string;
@@ -83,7 +94,7 @@ export interface FormationSpot { id: string; col: number; row: number } // id=�
 
 export interface Scenario {
   id: string;
-  version: number;          // 结构版本，用于存量数据迁移（当前 4）
+  version: number;          // 结构版本，用于存量数据迁移（当前 6）
   name: string;
   playersPerTeam: number;   // 默认 3（总数 6），上限 4（总数 8）
   professions: Profession[];
@@ -96,8 +107,8 @@ export interface Scenario {
   updatedAt: number;
 }
 
-// 默认事件排序（逻辑链：鼓励合作）
-export const DEFAULT_EVENT_ORDER = ['传', '掉', '射', '打断', '蓄力条更新', '拿', '争顶', '激活射门技能', '关闭射门技能'];
+// 默认事件排序（逻辑链：鼓励合作；v6 按 3v3 新方案更新）
+export const DEFAULT_EVENT_ORDER = ['传', '传球', '掉', '掉球', '射', '拿', '拿球', '传出', '位置更新', '距离小', '距离大', '蓄力储能', '蓄力状态结束', '打断', '被打断', '状态结束', '受击', '恢复', '回复', '争顶', '持球', '射门结束'];
 
 export function defaultOrderIndex(name: string): number {
   const i = DEFAULT_EVENT_ORDER.indexOf(name);

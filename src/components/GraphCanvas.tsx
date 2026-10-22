@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DomainGraph } from '@/types/model';
+import NodeDialog from './NodeDialog';
 
 interface Props {
   graph: DomainGraph;
@@ -18,6 +19,7 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
   const [linkMode, setLinkMode] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
   // 实测容器尺寸，让 SVG 用户坐标与屏幕像素 1:1 对应（避免不同窗口/缩放下图元漂移或放大）
   useEffect(() => {
@@ -199,7 +201,7 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
         <button onClick={resetView} className="px-3 py-1 rounded text-sm border bg-background/80 hover:bg-muted">
           视图复位
         </button>
-        <span className="px-3 py-1 text-xs text-muted-foreground">双击空白 = 新建状态 · 点击边 = 编辑事件 · 拖拽 = 移动</span>
+        <span className="px-3 py-1 text-xs text-muted-foreground">双击空白 = 新建状态 · 双击状态 = 编辑（时限/无限）· 点击边 = 编辑事件 · 拖拽 = 移动</span>
       </div>
       <svg
         width={size.w}
@@ -213,7 +215,9 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
       >
         {graph.edges.map(renderEdge)}
         {graph.nodes.map((n) => (
-          <g key={n.id} onMouseDown={(e) => onNodeMouseDown(e, n.id)} className="cursor-grab active:cursor-grabbing">
+          <g key={n.id} onMouseDown={(e) => onNodeMouseDown(e, n.id)}
+            onDoubleClick={(e) => { e.stopPropagation(); setEditingNodeId(n.id); }}
+            className="cursor-grab active:cursor-grabbing">
             <circle
               cx={n.x} cy={n.y} r={NODE_R}
               fill={linkFrom === n.id ? '#fbbf24' : selectedNode === n.id ? '#f59e0b' : '#ffffff'}
@@ -222,10 +226,21 @@ export default function GraphCanvas({ graph, onChange, onEditEdge, color }: Prop
             <text x={n.x} y={n.y + 4} textAnchor="middle" fontSize={13} fontWeight={600} fill="#0f172a" className="pointer-events-none select-none">
               {n.name.length > 6 ? n.name.slice(0, 6) : n.name}
             </text>
-            <title>{n.name}{n.note ? `：${n.note}` : ''}</title>
+            {n.timeLimit && (
+              <g className="pointer-events-none">
+                <circle cx={n.x + NODE_R * 0.72} cy={n.y - NODE_R * 0.72} r={8} fill="#f59e0b" stroke="#ffffff" strokeWidth={1.5} />
+                <text x={n.x + NODE_R * 0.72} y={n.y - NODE_R * 0.72 + 3.5} textAnchor="middle" fontSize={9} fontWeight={700} fill="#ffffff">⏱</text>
+                <title>时限状态：{n.timeLimit.ticks} tick 后触发「{n.timeLimit.timeoutEvent ?? '（未指定）'}」</title>
+              </g>
+            )}
+            <title>{n.name}{n.note ? `：${n.note}` : ''}{n.timeLimit ? `（时限 ${n.timeLimit.ticks} tick → ${n.timeLimit.timeoutEvent ?? '未指定'}）` : ''}</title>
           </g>
         ))}
       </svg>
+
+      <NodeDialog node={graph.nodes.find((n) => n.id === editingNodeId) ?? null} graph={graph}
+        onSave={(nd) => onChange({ ...graph, nodes: graph.nodes.map((n) => (n.id === nd.id ? nd : n)) })}
+        onClose={() => setEditingNodeId(null)} />
     </div>
   );
 }
