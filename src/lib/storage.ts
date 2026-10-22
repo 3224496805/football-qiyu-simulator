@@ -42,7 +42,25 @@ function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
-  if (v >= 11) return sc;
+  if (v >= 11) {
+    // 修复被误标 v11 的存档：按图特征补齐缺失的新语义图（v9/v8 直跳时漏换的）
+    const bt = sc.graphs['ballTrack'];
+    if (!bt || !bt.nodes.some((n) => n.name === '传向队友')) {
+      sc.graphs['possession'] = fresh.graphs['possession'];
+      sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
+    }
+    const hp = sc.graphs['hp'];
+    if (!hp || !hp.edges.some((e) => e.event === '回血')) {
+      sc.graphs['hp'] = fresh.graphs['hp'];
+    }
+    const pos = sc.graphs['position'];
+    if (pos && pos.nodes.length > 20) { // 旧 10×10 格子图 → 区域版
+      sc.graphs['position'] = fresh.graphs['position'];
+      sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
+      sc.formation = defaultFormation(sc.players);
+    }
+    return sc;
+  }
   if (v >= 10) {
     // v10→v11：替换球权/球路图，其余图/模板保留
     sc.graphs['possession'] = fresh.graphs['possession'];
@@ -51,14 +69,19 @@ function migrate(sc: Scenario): Scenario {
     return sc;
   }
   if (v >= 9) {
-    // v9→v10：仅替换血量图为阈值复合版，其余图/模板保留
+    // v9→v11：补齐血量复合版 + 新球权/球路（v9 存档没走过 v10 的血量迁移）
     sc.graphs['hp'] = fresh.graphs['hp'];
+    sc.graphs['possession'] = fresh.graphs['possession'];
+    sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
     sc.version = 11;
     return sc;
   }
   if (v >= 8) {
-    // v8→v9：仅替换位置图为区域版，其余图/模板保留；起点与阵型重置为区域语义
+    // v8→v11：位置图压缩 + 血量复合版 + 新球权/球路；起点与阵型重置为区域语义
     sc.graphs['position'] = fresh.graphs['position'];
+    sc.graphs['hp'] = fresh.graphs['hp'];
+    sc.graphs['possession'] = fresh.graphs['possession'];
+    sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
     sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
     sc.formation = defaultFormation(sc.players);
     sc.version = 11;
