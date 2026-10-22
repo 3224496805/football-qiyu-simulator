@@ -42,7 +42,17 @@ function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
-  if (v >= 12) return sc;
+  if (v >= 13) return sc;
+  if (v >= 12) {
+    // v12→v13：掉球/受击掉球合并为一条双通道边（主动+监听受击）
+    const pos = sc.graphs['possession'];
+    if (pos?.edges.some((e) => e.event === '受击掉球')) {
+      sc.graphs['possession'] = fresh.graphs['possession'];
+      sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
+    }
+    sc.version = 13;
+    return sc;
+  }
   if (v >= 11) {
     // v11/v12 存档自检修复：按图特征补齐缺失的新语义图（v9/v8 直跳时漏换的）+ 传球信号化
     const bt = sc.graphs['ballTrack'];
@@ -70,14 +80,14 @@ function migrate(sc: Scenario): Scenario {
       const sig = fresh.skills.find((s) => s.id === 'sk_sig_2');
       if (sig) sc.skills = [...sc.skills, sig];
     }
-    sc.version = 12;
+    sc.version = 13;
     return sc;
   }
   if (v >= 10) {
     // v10→v11：替换球权/球路图，其余图/模板保留
     sc.graphs['possession'] = fresh.graphs['possession'];
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
-    sc.version = 12;
+    sc.version = 13;
     return sc;
   }
   if (v >= 9) {
@@ -85,7 +95,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['hp'] = fresh.graphs['hp'];
     sc.graphs['possession'] = fresh.graphs['possession'];
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
-    sc.version = 12;
+    sc.version = 13;
     return sc;
   }
   if (v >= 8) {
@@ -96,7 +106,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
     sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
     sc.formation = defaultFormation(sc.players);
-    sc.version = 12;
+    sc.version = 13;
     return sc;
   }
   if (v >= 5) {
@@ -114,10 +124,10 @@ function migrate(sc: Scenario): Scenario {
     sc.balance.hpRegen ??= 5;
     sc.startState = fresh.startState;
     sc.formation = defaultFormation(sc.players);
-    sc.version = 12;
+    sc.version = 13;
     return sc;
   }
-  sc.version = 12;
+  sc.version = 13;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

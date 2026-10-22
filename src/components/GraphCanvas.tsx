@@ -177,9 +177,9 @@ export default function GraphCanvas({ graph, graphs, onChange, onEditEdge, color
         <text x={cx} y={cy - 6} textAnchor="middle" fontSize={12} fill={stroke}
           stroke="#ffffff" strokeWidth={4} paintOrder="stroke" strokeLinejoin="round"
           className="pointer-events-none select-none">
-          {ed.event}{ed.isHyper ? ' ⇄' : ''}{ed.trigger === 'passive' ? ' ·被' : ''}
+          {ed.event}{ed.isHyper ? ' ⇄' : ''}{(ed.listenEvents?.length ?? 0) > 0 ? ' ·被' : ''}
         </text>
-        <title>{`事件：${ed.event}${ed.trigger === 'passive' ? `（被动，监听 ${(ed.listenEvents ?? []).join('、')}）` : ''}\n执行：${f.name} → ${t.name}\n条件：${ed.condition}${ed.preStates?.length ? `\n跨图前提：${ed.preStates.map((p) => `在「${graphs?.[p.graph]?.name ?? p.graph}」${p.not ? '不处于' : '处于'}「${p.state}」`).join('；')}` : ''}`}</title>
+        <title>{`事件：${ed.event}${(ed.listenEvents?.length ?? 0) > 0 ? `（监听 ${(ed.listenEvents ?? []).join('、')}${ed.trigger === 'passive' ? '，仅级联' : '，主动+级联'}）` : ''}\n执行：${f.name} → ${t.name}\n条件：${ed.condition}${ed.preStates?.length ? `\n跨图前提：${ed.preStates.map((p) => `在「${graphs?.[p.graph]?.name ?? p.graph}」${p.not ? '不处于' : '处于'}「${p.state}」`).join('；')}` : ''}`}</title>
         <defs>
           <marker id={`arrow_${ed.id}`} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
             <path d="M0,0 L8,4 L0,8 z" fill={stroke} />

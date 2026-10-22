@@ -269,11 +269,12 @@ export function stepSim(
         suppressed[lose.event] = (suppressed[lose.event] ?? 0) + 1;
         log.push({ tick, entity: ent.name, graphId: gid, event: lose.event, from: curName, to: g.nodes.find((n) => n.id === lose.to)?.name ?? '?', outcome: 'suppressed', reason: `同刻冲突输给「${win.event}」（权威名次 #${rankOf.get(win.id)}）` });
       }
-      // 级联：该实体上监听本事件的 passive 边入队，于下一次判定参与竞争
+      // 级联：该实体上监听本事件的边入队，于下一次判定参与竞争
+      //（主动边带 listenEvents = 随机 + 级联双通道；被动边 = 仅级联）
       for (const [gid2, g2] of Object.entries(sc.graphs)) {
         if (g2.owner !== ent.kind) continue;
         for (const e2 of g2.edges) {
-          if (e2.trigger !== 'passive' || !e2.listenEvents?.includes(win.event)) continue;
+          if (!e2.listenEvents?.includes(win.event)) continue;
           const k = `${ent.name}@${gid2}`;
           if (!newPending[k]) newPending[k] = [];
           if (!newPending[k].includes(e2.id)) {
