@@ -248,7 +248,8 @@ export default function Home() {
         {tab === '动态模拟' && <SimPanel scenario={scenario} result={result} />}
         {tab === '事件库' && (
           <div className="p-4 space-y-4">
-            <SkillPanel scenario={scenario} onChange={(skills) => setScenario({ ...scenario, skills })} />
+            <SkillPanel scenario={scenario} onChange={(skills) => setScenario({ ...scenario, skills })}
+              onLocate={(gid) => { setDomain(gid as DomainId); setTab('图编辑'); }} />
             <AiGenPanel scenario={scenario}
               onAddGraph={(g) => setScenario({ ...scenario, graphs: { ...scenario.graphs, [g.id]: g } })} />
           </div>

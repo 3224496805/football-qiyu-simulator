@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Scenario, SkillKind, SkillTemplate } from '@/types/model';
 import { SKILL_KIND_NAMES } from '@/types/model';
 import { metersToCells } from '@/lib/defaultScenario';
@@ -5,6 +6,7 @@ import { metersToCells } from '@/lib/defaultScenario';
 interface Props {
   scenario: Scenario;
   onChange: (skills: SkillTemplate[]) => void;
+  onLocate: (gid: string) => void; // 跳转到图编辑并选中某张逻辑图
 }
 
 let skSeq = 0;
@@ -17,8 +19,23 @@ const KIND_STYLE: Record<SkillKind, string> = {
   displacement: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
 };
 
-export default function SkillPanel({ scenario, onChange }: Props) {
+export default function SkillPanel({ scenario, onChange, onLocate }: Props) {
   const skills = scenario.skills;
+  const [filter, setFilter] = useState('');
+
+  // 图内全部事件（边）：直接从逻辑图派生，与图编辑天然同步
+  const allEdges = Object.entries(scenario.graphs).flatMap(([gid, g]) =>
+    g.edges.map((e) => ({
+      gid, gname: g.name, edge: e,
+      fromName: g.nodes.find((n) => n.id === e.from)?.name ?? '?',
+      toName: g.nodes.find((n) => n.id === e.to)?.name ?? '?',
+      skillName: scenario.skills.find((s) => s.id === e.skillId)?.name,
+    })));
+
+  const trigLabel = (e: (typeof allEdges)[number]['edge']) =>
+    (e.listenEvents?.length ?? 0) > 0
+      ? (e.trigger === 'passive' ? `仅级联·监听 ${e.listenEvents!.join('/')}` : `主动+级联·监听 ${e.listenEvents!.join('/')}`)
+      : '主动';
 
   const add = (kind: SkillKind) => {
     onChange([...skills, {
@@ -95,6 +112,21 @@ export default function SkillPanel({ scenario, onChange }: Props) {
       </div>
       <input className="w-full border rounded px-2 py-1 text-xs bg-background" placeholder="备注（触发方式、限制等）" value={s.note ?? ''}
         onChange={(e) => update(s.id, { note: e.target.value })} />
+      {(() => {
+        const bound = allEdges.filter((b) => b.edge.skillId === s.id);
+        if (bound.length === 0) return <div className="text-xs text-muted-foreground">未绑定任何逻辑图边</div>;
+        return (
+          <div className="text-xs border-t pt-1.5 space-y-0.5">
+            <div className="text-muted-foreground">绑定 {bound.length} 条边（点击跳转图编辑）：</div>
+            {bound.map((b) => (
+              <button key={b.edge.id} onClick={() => onLocate(b.gid)}
+                className="block w-full text-left px-1.5 py-0.5 rounded hover:bg-muted truncate">
+                {b.gname} · {b.edge.event}（{b.fromName} → {b.toName}）
+              </button>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 
@@ -113,6 +145,33 @@ export default function SkillPanel({ scenario, onChange }: Props) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {skills.map(card)}
+      </div>
+
+      <div className="border rounded p-3 space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h4 className="font-bold">图内事件总表（{allEdges.length} 条，与逻辑图实时同步）</h4>
+          <input className="ml-auto border rounded px-2 py-1 text-xs bg-background w-52" placeholder="按事件名 / 图名筛选…"
+            value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          事件 = 条件 + 执行的状态变化（超图边的限定描述）。本表由逻辑图直接派生——图编辑里改条件、改名、增删边都会即时反映在这里，无需手动同步。
+        </p>
+        <div className="space-y-1 max-h-96 overflow-auto">
+          {allEdges
+            .filter((b) => !filter || b.edge.event.includes(filter) || b.gname.includes(filter))
+            .map((b) => (
+              <div key={b.edge.id} className="flex items-center gap-2 text-xs border rounded px-2 py-1">
+                <button onClick={() => onLocate(b.gid)} className="text-blue-600 hover:underline shrink-0">{b.gname}</button>
+                <span className="font-medium shrink-0">{b.edge.event}</span>
+                <span className="text-muted-foreground shrink-0">{b.fromName} → {b.toName}</span>
+                <span className={`px-1.5 rounded shrink-0 ${b.edge.trigger === 'passive' ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' : 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300'}`}>
+                  {trigLabel(b.edge)}
+                </span>
+                {b.skillName && <span className="px-1.5 rounded bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 shrink-0">{b.skillName}</span>}
+                <span className="text-muted-foreground truncate" title={b.edge.condition}>{b.edge.condition}</span>
+              </div>
+            ))}
+        </div>
       </div>
     </div>
   );
