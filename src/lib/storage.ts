@@ -42,8 +42,9 @@ function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
+  if (v >= 12) return sc;
   if (v >= 11) {
-    // 修复被误标 v11 的存档：按图特征补齐缺失的新语义图（v9/v8 直跳时漏换的）
+    // v11/v12 存档自检修复：按图特征补齐缺失的新语义图（v9/v8 直跳时漏换的）+ 传球信号化
     const bt = sc.graphs['ballTrack'];
     if (!bt || !bt.nodes.some((n) => n.name === '传向队友')) {
       sc.graphs['possession'] = fresh.graphs['possession'];
@@ -53,19 +54,30 @@ function migrate(sc: Scenario): Scenario {
     if (!hp || !hp.edges.some((e) => e.event === '回血')) {
       sc.graphs['hp'] = fresh.graphs['hp'];
     }
-    const pos = sc.graphs['position'];
-    if (pos && pos.nodes.length > 20) { // 旧 10×10 格子图 → 区域版
+    const posG = sc.graphs['position'];
+    if (posG && posG.nodes.length > 20) { // 旧 10×10 格子图 → 区域版
       sc.graphs['position'] = fresh.graphs['position'];
       sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
       sc.formation = defaultFormation(sc.players);
     }
+    // v11→v12：传球信号化（绑定信号技能模板 sk_sig_2）
+    const pos = sc.graphs['possession'];
+    const passEdge = pos?.edges.find((e) => e.event === '传球');
+    if (pos && passEdge && passEdge.skillKind !== 'signal') {
+      sc.graphs['possession'] = fresh.graphs['possession'];
+    }
+    if (!sc.skills.some((s) => s.id === 'sk_sig_2')) {
+      const sig = fresh.skills.find((s) => s.id === 'sk_sig_2');
+      if (sig) sc.skills = [...sc.skills, sig];
+    }
+    sc.version = 12;
     return sc;
   }
   if (v >= 10) {
     // v10→v11：替换球权/球路图，其余图/模板保留
     sc.graphs['possession'] = fresh.graphs['possession'];
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
-    sc.version = 11;
+    sc.version = 12;
     return sc;
   }
   if (v >= 9) {
@@ -73,7 +85,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['hp'] = fresh.graphs['hp'];
     sc.graphs['possession'] = fresh.graphs['possession'];
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
-    sc.version = 11;
+    sc.version = 12;
     return sc;
   }
   if (v >= 8) {
@@ -84,7 +96,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
     sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
     sc.formation = defaultFormation(sc.players);
-    sc.version = 11;
+    sc.version = 12;
     return sc;
   }
   if (v >= 5) {
@@ -102,10 +114,10 @@ function migrate(sc: Scenario): Scenario {
     sc.balance.hpRegen ??= 5;
     sc.startState = fresh.startState;
     sc.formation = defaultFormation(sc.players);
-    sc.version = 11;
+    sc.version = 12;
     return sc;
   }
-  sc.version = 11;
+  sc.version = 12;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

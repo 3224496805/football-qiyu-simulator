@@ -55,7 +55,7 @@ function possessionGraph(): DomainGraph {
     { name: '持球', x: 470, y: 260 },
   ], [
     { event: '拿球', from: '无球', to: '持球', condition: '拿球距离前提：与球相距 ≤ 2 格（球处于「传向队友」追踪 或 「自由球」滚动中）才触发；传球本身不会直接把接球方变成持球', isHyper: true, basePriority: 3 },
-    { event: '传球', from: '持球', to: '无球', condition: '传球键触发，目标只能是队友；本质 = 持球→无球结束本方球权，球进入「传向队友」朝随机一个队友追踪，队友在距离前提满足时自行拿球', isHyper: true, basePriority: 7, structWeight: 1.2 },
+    { event: '传球', from: '持球', to: '无球', condition: '【信号技能·传球引导】按下传球键选定队友目标并传出信号，确认后执行：本质 = 持球→无球结束本方球权，球进入「传向队友」朝随机一个队友追踪，队友在距离前提满足时自行拿球', skillKind: 'signal', skillId: 'sk_sig_2', isHyper: true, basePriority: 7, structWeight: 1.2 },
     { event: '掉球', from: '持球', to: '无球', condition: '被断球 或 血量低于掉球阈值；球直接成为自由球朝地图中心运动', isHyper: true, basePriority: 6 },
     { event: '受击掉球', from: '持球', to: '无球', condition: '【被动】受击事件执行后进入下一次判定：若此时血量低于掉球阈值则掉球（级联：血量→球权→球路）', isHyper: true, basePriority: 6, trigger: 'passive', listenEvents: ['受击'] },
   ]);
@@ -272,6 +272,7 @@ const defaultSkills: SkillTemplate[] = [
   { id: 'sk_imp_5', name: '侧身闪避', kind: 'impact', damage: 0, displacement: 12, cooldown: 2, range: 4, note: '后卫：斜向 1 格（12m）' },
   { id: 'sk_imp_6', name: '肘击', kind: 'impact', damage: 12, displacement: 0, cooldown: 2, range: 0.8, note: '中场：低伤害短冷却' },
   { id: 'sk_sig_1', name: '蓄力储能', kind: 'signal', chargeMax: 100, cooldown: 0, range: 0, note: '信号类：按住射门键持续蓄能，满 100（3 tick）强制起脚' },
+  { id: 'sk_sig_2', name: '传球引导', kind: 'signal', chargeMax: 100, cooldown: 0, range: 0, note: '信号类：按下传球键选定队友目标并传出信号，确认后执行「传球」事件（本质：持球→无球，球进入传向队友追踪）' },
   { id: 'sk_aux_1', name: '治疗喷雾', kind: 'aux', effectValue: 25, cooldown: 8, range: 3, note: '辅助类：恢复目标血量（效果值=25）' },
 ];
 
@@ -305,7 +306,7 @@ export function createDefaultScenario(): Scenario {
   const players = buildRoster(3, defaultProfessions);
   return {
     id: newId(),
-    version: 11,
+    version: 12,
     name: '示例：3v3 标准赛',
     playersPerTeam: 3,
     professions: defaultProfessions.map((p) => ({ ...p })),
