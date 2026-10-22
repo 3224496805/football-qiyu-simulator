@@ -47,14 +47,16 @@ export function makeGraph(id: string, owner: EntityKind, name: string, nodeDefs:
 }
 
 // ---------- 球权逻辑（挂角色：无球 ⇄ 持球，球掉了或传出即结束） ----------
+// 传球本质 = 持球→无球（结束本方球权）；接球方不是在传球瞬间变成持球，
+// 而是等球追踪/滚动到位、拿球距离前提满足后，自行触发「拿球」事件。
 function possessionGraph(): DomainGraph {
   return makeGraph('possession', 'player', '球权逻辑', [
     { name: '无球', x: 160, y: 260, note: 'DFS 起点' },
     { name: '持球', x: 470, y: 260 },
   ], [
-    { event: '拿球', from: '无球', to: '持球', condition: '争抢成功（与球网格坐标距离<抢截半径；球路逻辑同步「拿球」）', isHyper: true, basePriority: 3 },
-    { event: '传球', from: '持球', to: '无球', condition: '传球键触发，且目标只能是队友（同队实体）；球路逻辑同步「传出」，球向接球队友位置移动', isHyper: true, basePriority: 7, structWeight: 1.2 },
-    { event: '掉球', from: '持球', to: '无球', condition: '被断球 或 血量低于掉球阈值（球进入球路逻辑「传出」）', isHyper: true, basePriority: 6 },
+    { event: '拿球', from: '无球', to: '持球', condition: '拿球距离前提：与球相距 ≤ 2 格（球处于「传向队友」追踪 或 「自由球」滚动中）才触发；传球本身不会直接把接球方变成持球', isHyper: true, basePriority: 3 },
+    { event: '传球', from: '持球', to: '无球', condition: '传球键触发，目标只能是队友；本质 = 持球→无球结束本方球权，球进入「传向队友」朝随机一个队友追踪，队友在距离前提满足时自行拿球', isHyper: true, basePriority: 7, structWeight: 1.2 },
+    { event: '掉球', from: '持球', to: '无球', condition: '被断球 或 血量低于掉球阈值；球直接成为自由球朝地图中心运动', isHyper: true, basePriority: 6 },
     { event: '受击掉球', from: '持球', to: '无球', condition: '【被动】受击事件执行后进入下一次判定：若此时血量低于掉球阈值则掉球（级联：血量→球权→球路）', isHyper: true, basePriority: 6, trigger: 'passive', listenEvents: ['受击'] },
   ]);
 }
@@ -208,16 +210,22 @@ function hpGraph(): DomainGraph {
   ]);
 }
 
-// ---------- 球路逻辑（挂球实体）：持球 ⇄ 自由球；传球飞向队友，掉球滚向球场中心 ----------
+// ---------- 球路逻辑（挂球实体）：球被持有 / 传向队友（追踪）/ 自由球（朝中心） ----------
+// 球的位置状态分两类运动：
+//   传向队友 = 传出后朝随机一个队友追踪（队友拿球距离前提满足时自行拿球）；
+//   自由球   = 掉球后直接自由运动，朝地图中心滚动（任何人距离前提满足时可拿球）。
 function ballTrackGraph(): DomainGraph {
   return makeGraph('ballTrack', 'ball', '球路逻辑', [
     { name: '球被持有', x: 150, y: 260, note: '球在某角色脚下（伴随球权逻辑）' },
-    { name: '自由球', x: 560, y: 260, note: '传/射/掉后空中或滚动；落点按事件规则更新' },
+    { name: '传向队友', x: 570, y: 130, note: '传出后进入：朝随机一个队友的位置逐 tick 追踪；队友在拿球距离前提满足时触发拿球' },
+    { name: '自由球', x: 570, y: 400, note: '掉球/受击掉球后进入：朝地图中心 (4,4) 自由运动；任何球员距离前提满足时可拿球' },
   ], [
-    { event: '传出', from: '球被持有', to: '自由球', condition: '角色传球（只能传给队友）或射门/掉球事件触发（联动球权逻辑）', isHyper: true, basePriority: 7 },
-    { event: '球移向队友', from: '自由球', to: '自由球', condition: '【被动·同为事件】传球后球沿传球方向逐 tick 向接球队友的位置状态移动，到达队友所在格停止', basePriority: 3, trigger: 'passive', listenEvents: ['传出'] },
-    { event: '滚向中心', from: '自由球', to: '自由球', condition: '【被动·同为事件】掉球后球向球场中心位置状态 (4,4)~(5,5) 滚动，到达即停', basePriority: 2, trigger: 'passive', listenEvents: ['掉球', '受击掉球'] },
-    { event: '拿球', from: '自由球', to: '球被持有', condition: '角色满足拿球事件（与球权逻辑「拿球」联动）', isHyper: true, basePriority: 3 },
+    { event: '传出', from: '球被持有', to: '传向队友', condition: '【被动】持球方执行传球/射门（本质：持球→无球）后，球传出并随机选定一名队友作为追踪目标', isHyper: true, basePriority: 7, trigger: 'passive', listenEvents: ['传球', '射'] },
+    { event: '掉球', from: '球被持有', to: '自由球', condition: '【被动】掉球/受击掉球后球直接成为自由球，朝地图中心运动', isHyper: true, basePriority: 6, trigger: 'passive', listenEvents: ['掉球', '受击掉球'] },
+    { event: '追踪队友', from: '传向队友', to: '传向队友', condition: '朝追踪目标（传出时随机选定的队友）位置移动 1 格；追踪持续到队友拿球为止', basePriority: 3 },
+    { event: '滚向中心', from: '自由球', to: '自由球', condition: '朝地图中心 (4,4) 移动 1 格，到达即停', basePriority: 2 },
+    { event: '拿球', from: '传向队友', to: '球被持有', condition: '【被动】某球员执行拿球事件（无球→持球，距离前提满足）后，球被该球员持有', isHyper: true, basePriority: 3, trigger: 'passive', listenEvents: ['拿球'] },
+    { event: '拿球', from: '自由球', to: '球被持有', condition: '【被动】同上：自由球被距离前提满足的球员拿走', isHyper: true, basePriority: 3, trigger: 'passive', listenEvents: ['拿球'] },
   ]);
 }
 
@@ -297,7 +305,7 @@ export function createDefaultScenario(): Scenario {
   const players = buildRoster(3, defaultProfessions);
   return {
     id: newId(),
-    version: 10,
+    version: 11,
     name: '示例：3v3 标准赛',
     playersPerTeam: 3,
     professions: defaultProfessions.map((p) => ({ ...p })),

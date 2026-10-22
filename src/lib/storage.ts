@@ -37,15 +37,23 @@ export function loadScenario(id: string): Scenario | null {
 // v6→v8（合并执行）：冲击技能合并 + 跨图前提 + 多起点 DFS + 新规则图。
 // v8→v9：位置图压缩为 9×9 网格 + 3×3 区域状态（DFS 只跑区域级转移），起点/阵型重置。
 // v9→v10：血量图改为「阈值复合状态 + 内部血量子状态（数值）」，回血是复合状态内部更新事件。
+// v10→v11：球路重构（球被持有/传向队友追踪/自由球朝中心），传球本质 = 持球→无球 + 拿球距离前提。
 function migrate(sc: Scenario): Scenario {
   if (!sc || !sc.graphs || !sc.balance) return sc;
   const fresh = createDefaultScenario();
   const v = sc.version ?? 1;
-  if (v >= 10) return sc;
+  if (v >= 11) return sc;
+  if (v >= 10) {
+    // v10→v11：替换球权/球路图，其余图/模板保留
+    sc.graphs['possession'] = fresh.graphs['possession'];
+    sc.graphs['ballTrack'] = fresh.graphs['ballTrack'];
+    sc.version = 11;
+    return sc;
+  }
   if (v >= 9) {
     // v9→v10：仅替换血量图为阈值复合版，其余图/模板保留
     sc.graphs['hp'] = fresh.graphs['hp'];
-    sc.version = 10;
+    sc.version = 11;
     return sc;
   }
   if (v >= 8) {
@@ -53,7 +61,7 @@ function migrate(sc: Scenario): Scenario {
     sc.graphs['position'] = fresh.graphs['position'];
     sc.startState = { ...fresh.startState, ...sc.startState, position: '本方-中' };
     sc.formation = defaultFormation(sc.players);
-    sc.version = 10;
+    sc.version = 11;
     return sc;
   }
   if (v >= 5) {
@@ -71,10 +79,10 @@ function migrate(sc: Scenario): Scenario {
     sc.balance.hpRegen ??= 5;
     sc.startState = fresh.startState;
     sc.formation = defaultFormation(sc.players);
-    sc.version = 10;
+    sc.version = 11;
     return sc;
   }
-  sc.version = 10;
+  sc.version = 11;
   sc.graphs = fresh.graphs;
   sc.professions = fresh.professions;
   sc.players = buildRoster(sc.playersPerTeam || 3, sc.professions);

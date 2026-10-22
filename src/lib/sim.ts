@@ -17,6 +17,7 @@ export interface EntityState {
   states: Record<string, string>; // graphId -> 状态名（position 图 = 3×3 区域名）
   spot?: { col: number; row: number }; // 底层精确格子坐标（区域内移动不改逻辑状态，只改这里）
   hpValue?: number; // 血量子状态（数值）：血量图是阈值复合状态，事件更新数值后按阈值派生状态
+  target?: string; // 球路：传出时随机选定的追踪队友
 }
 
 export interface SimEvent {
@@ -116,6 +117,7 @@ export function stepSim(
   const entities = state.entities.map((ent) => {
     const states = { ...ent.states };
     let newSpot: { col: number; row: number } | undefined; // 本 tick 执行事件后的新格子坐标
+    let newTarget: string | null | undefined; // undefined = 追踪目标不变；null = 清除；字符串 = 设定新目标
     // 跨图状态前提：事件要求该实体在另一张图上处于/不处于某状态（条件的一部分）
     const preOk = (e: { preStates?: { graph: string; state: string; not?: boolean }[] }) =>
       !(e.preStates ?? []).some((p) => {
@@ -196,18 +198,39 @@ export function stepSim(
         newSpot = { col: nc, row: nr };
         toName = zoneOfCell(nc, nr); // 权威逻辑状态以坐标派生为准
       } else if (ent.kind === 'ball' && gid === 'ballTrack') {
-        // 球路：传出后逐 tick 移向队友；掉球滚向中心；被拿则吸附到持球人脚下
+        // 球路两种运动：传向队友 = 朝传出时随机选定的队友追踪；自由球 = 朝地图中心滚动
         const prev = ent.spot ?? { col: 4, row: 4 };
         const d2 = (x: { spot?: { col: number; row: number } }) =>
           x.spot ? (x.spot.col - prev.col) ** 2 + (x.spot.row - prev.row) ** 2 : Infinity;
         const mates = state.entities.filter((x) => x.kind === 'player');
         const near = mates.length ? mates.reduce((a, b) => (d2(a) <= d2(b) ? a : b)) : undefined;
-        if (win.event === '球移向队友' && near?.spot) {
-          newSpot = { col: clamp(prev.col + Math.sign(near.spot.col - prev.col)), row: clamp(prev.row + Math.sign(near.spot.row - prev.row)) };
+        const step = (t: { col: number; row: number }) => ({
+          col: clamp(prev.col + Math.sign(t.col - prev.col)),
+          row: clamp(prev.row + Math.sign(t.row - prev.row)),
+        });
+        if (win.event === '传出') {
+          // 追踪目标 = 随机一个队友（模拟近似：随机一名球员）
+          if (mates.length) newTarget = mates[Math.floor(Math.random() * mates.length)].name;
+        } else if (win.event === '追踪队友') {
+          const tgt = state.entities.find((x) => x.name === ent.target && x.spot);
+          if (tgt?.spot) newSpot = step(tgt.spot);
         } else if (win.event === '滚向中心') {
-          newSpot = { col: clamp(prev.col + Math.sign(4 - prev.col)), row: clamp(prev.row + Math.sign(4 - prev.row)) };
+          newSpot = step({ col: 4, row: 4 });
         } else if (win.event === '拿球' && near?.spot) {
           newSpot = { col: near.spot.col, row: near.spot.row };
+          newTarget = null; // 被拿后清除追踪目标
+        } else if (win.event === '掉球') {
+          newTarget = null;
+        }
+      }
+      // ---- 拿球距离前提：传球只结束持球方球权，接球方须待球到位（2 格拿球半径内） ----
+      if (ent.kind === 'player' && gid === 'possession' && win.event === '拿球') {
+        const ball = state.entities.find((x) => x.kind === 'ball');
+        const s = ent.spot, b = ball?.spot;
+        const inRange = !s || !b ? true : Math.max(Math.abs(b.col - s.col), Math.abs(b.row - s.row)) <= 2;
+        if (!inRange) {
+          log.push({ tick, entity: ent.name, graphId: gid, event: '拿球', from: curName, to: toName, outcome: 'missed', reason: '拿球距离前提不满足：球不在 2 格拿球半径内（球仍在传向队友/自由运动中）' });
+          continue;
         }
       }
       // ---- 血量图：阈值复合状态 = 内部血量子状态（数值）；事件更新数值，状态按阈值派生 ----
@@ -260,7 +283,7 @@ export function stepSim(
         }
       }
     }
-    return { ...ent, states, spot: newSpot ?? ent.spot };
+    return { ...ent, states, spot: newSpot ?? ent.spot, target: newTarget === undefined ? ent.target : (newTarget ?? undefined) };
   });
 
   // 血量数值写回（血量图事件产生的内部更新）
