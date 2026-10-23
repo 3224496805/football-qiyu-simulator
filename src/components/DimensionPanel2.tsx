@@ -185,7 +185,8 @@ export default function DimensionPanel2({ sc, onChange }: Props) {
             ['damage', '伤害基准', '无特殊说明时一次扣血的默认值'],
             ['hpMax', '血量上限', '角色开局和回血的上限'],
             ['attackRange', '攻击距离（格）', '冲击类技能能打到多远的持球者'],
-            ['shootRange', '射门距离（格）', '离球门多近才会进入射门待命'],
+            ['shootRange', '射门距离（格）', '拿着球且离球门这么近时，才会进入射门激活'],
+            ['controlTicks', '受控持续（拍）', '受控是限时状态：被打受控后多少拍自动恢复自由'],
           ] as const).map(([key, label, tip]) => (
             <label key={key} className="text-xs space-y-0.5" title={tip}>
               <div className="text-muted-foreground">{label}</div>

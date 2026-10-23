@@ -170,12 +170,26 @@ export function computePriorities2(sc: Scenario2, w: PriorityWeights = DEFAULT_P
     let best = 0;
     let bestFrom = '';
     let bestPenalized = false;
+    let anchored = false; // 纯数值事件按前提锚点评分
     for (const f of allEffects) {
       if (!steadyOf.has(f.from)) continue;
       const penalized = smallSet.has(f.from) && smallSet.has(f.to);
       const raw = w.wSteady * steadyOf.get(f.from)! + w.wPath * pathOf(f.from);
       const v = penalized ? raw * w.penalty : raw;
       if (v > best || bestFrom === '') { best = v; bestFrom = f.from; bestPenalized = penalized; }
+    }
+    if (allEffects.length === 0) {
+      // 纯数值事件（冲击/回血这类：只改数值、不改状态）在状态图上看不到边，
+      // 改用它的「肯定前提」状态当锚点：前提出现在哪个状态，这条事件就在哪个状态有意义。
+      // 纯数值事件不造成状态迁移，短环惩罚不适用。
+      anchored = true;
+      const anchors = new Set<string>();
+      for (const m of members) for (const p of m.preStates) if (!p.not) anchors.add(p.state);
+      for (const a of anchors) {
+        if (!steadyOf.has(a)) continue;
+        const v = w.wSteady * steadyOf.get(a)! + w.wPath * pathOf(a);
+        if (v > best || bestFrom === '') { best = v; bestFrom = a; }
+      }
     }
     const manual = Math.min(1, Math.max(...members.map((m) => m.basePriority)) / 10);
     const score = +(best + w.wManual * manual).toFixed(4);
@@ -184,8 +198,10 @@ export function computePriorities2(sc: Scenario2, w: PriorityWeights = DEFAULT_P
     const bits: string[] = [];
     if (isComposite) bits.push(`复合事件：${members.map((m) => `${m.name}（${m.owner === 'player' ? '角色' : m.owner === 'ball' ? '球' : '球门'}·${m.trigger}）`).join(' + ')}`);
     bits.push(bestFrom
-      ? `主要靠源状态「${bestFrom}」：稳态 ${(steady * w.wSteady).toFixed(3)} + 路径 ${(path * w.wPath).toFixed(3)}`
-      : '没有状态变化，只有手动分');
+      ? (anchored
+        ? `纯数值事件，按前提锚点「${bestFrom}」的出现频率评分：稳态 ${(steady * w.wSteady).toFixed(3)} + 路径 ${(path * w.wPath).toFixed(3)}`
+        : `主要靠源状态「${bestFrom}」：稳态 ${(steady * w.wSteady).toFixed(3)} + 路径 ${(path * w.wPath).toFixed(3)}`)
+      : '没有状态变化也没有肯定前提，只有手动分');
     if (bestPenalized) bits.push(`在短环内，×${w.penalty} 惩罚`);
     bits.push(`手动微调 +${(w.wManual * manual).toFixed(3)}`);
     return {

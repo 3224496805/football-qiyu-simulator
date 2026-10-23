@@ -4,6 +4,7 @@
 // 每一行都能点开看"分数是哪来的"，拒绝黑箱
 import { Fragment, useMemo, useState } from 'react';
 import { computePriorities2 } from '@/lib/priority2';
+import { collectCoexist, collectConflicts } from '@/lib/derive2';
 import type { PriorityWeights, Scenario2 } from '@/types/model2';
 import { DEFAULT_PRIORITY_WEIGHTS, ENTITY_NAMES } from '@/types/model2';
 
@@ -34,6 +35,8 @@ function WeightSlider({ label, tip, value, min, max, step, onSlide }: {
 export default function PriorityPanel2({ sc, onChange }: Props) {
   const w = sc.weights ?? DEFAULT_PRIORITY_WEIGHTS;
   const result = useMemo(() => computePriorities2(sc, w), [sc, w]);
+  const conflicts = useMemo(() => collectConflicts(sc), [sc]);
+  const coexists = useMemo(() => collectCoexist(sc), [sc]);
   const [openId, setOpenId] = useState<string | null>(null);
   const maxScore = Math.max(0.0001, ...result.rows.map((r) => r.score));
 
@@ -102,7 +105,8 @@ export default function PriorityPanel2({ sc, onChange }: Props) {
       <div className="border rounded p-3 bg-muted/40 text-xs leading-relaxed">
         <b>打分公式（在总超图上算）：</b>最终分 = {w.wSteady.toFixed(2)} × 稳态概率 + {w.wPath.toFixed(2)} × 主循环路径分 + {w.wManual.toFixed(2)} × 手动微调（基础优先级 ÷ 10）。
         稳态概率 = 长期运行下状态的停留概率（幂迭代收敛，每步 {Math.round(w.jump * 100)}% 几率随机跳转防死角）；路径分 = 距主循环越近、能到达的层越深越高，主循环内 = 1；
-        落在短环（2~3 个状态的小圈）里的变化 × {w.penalty.toFixed(2)} 惩罚。事件有多条变化时按最高分的那条计。
+        落在短环（2~3 个状态的小圈）里的变化 × {w.penalty.toFixed(2)} 惩罚。事件有多条变化时按最高分的那条计；
+        没有状态变化的纯数值事件（如冲击/回血）改用它的前提状态当锚点评分——前提在哪个状态出现得多，这条事件就在哪重要。
         主循环成员：{result.mainLoop.length > 0 ? result.mainLoop.join('、') : '（无）'}
       </div>
 
@@ -112,6 +116,57 @@ export default function PriorityPanel2({ sc, onChange }: Props) {
           {result.smallCycles.map((c, i) => (
             <span key={i} className="inline-block mr-2 mt-1 px-1.5 py-0.5 border border-amber-300 rounded">{c.join(' ⇄ ')}</span>
           ))}
+        </div>
+      )}
+
+      {/* 矛盾分栏：同一状态有多个去向 = 岔路口；不同去向之间两两矛盾，同一去向的多条事件是共存 */}
+      {(conflicts.length > 0 || coexists.length > 0) && (
+        <div className="border rounded-lg bg-card">
+          <div className="px-3 py-2 bg-muted/50 font-bold text-xs">
+            矛盾分栏（{conflicts.length} 个岔路口）
+            <span className="ml-2 font-normal text-muted-foreground">
+              栏内不同去向之间两两矛盾；同一去向框在一起的是共存卡牌（不矛盾）
+            </span>
+          </div>
+          <div className="p-3 space-y-2 max-h-72 overflow-auto">
+            {conflicts.map((g) => (
+              <div key={`${g.dimId}|${g.from}`} className="border rounded p-2 text-xs">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="font-bold">{g.dimName} · {g.from}</span>
+                  <span className={`px-1.5 rounded-full text-[10px] text-white ${
+                    g.risk === '被动撞车' ? 'bg-amber-600' : g.risk === '混合' ? 'bg-sky-600' : 'bg-slate-400'
+                  }`}>{g.risk}</span>
+                  {g.risk === '被动撞车' && (
+                    <span className="text-[10px] text-amber-700 dark:text-amber-300">多条被动事件可能同时满足前提，系统会随机挑一条——确认是否故意</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {g.branches.map((b) => (
+                    <div key={b.to} className={`rounded px-2 py-1 ${b.events.length > 1 ? 'border-2 border-violet-500 bg-violet-50 dark:bg-violet-950/40' : 'border bg-muted/40'}`}>
+                      <span className="text-muted-foreground">→ {b.to}：</span>
+                      {b.events.map((e) => (
+                        <span key={e.id} className="inline-block mr-1 px-1 rounded bg-background border">
+                          {e.group ?? e.name}
+                          <span className={`ml-0.5 text-[9px] ${e.trigger === '主动' ? 'text-blue-600' : 'text-orange-600'}`}>{e.trigger}</span>
+                        </span>
+                      ))}
+                      {b.events.length > 1 && <span className="text-[10px] text-violet-600 dark:text-violet-300 ml-0.5">共存</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {coexists.length > 0 && (
+            <div className="px-3 pb-2 text-[10px] text-muted-foreground">
+              纯共存点（多条事件做同一个变化，不矛盾，可考虑合并）：
+              {coexists.map((c) => (
+                <span key={`${c.dimId}|${c.from}|${c.to}`} className="inline-block mr-2 mt-1 px-1.5 py-0.5 border border-violet-300 rounded">
+                  {c.dimName}·{c.from}→{c.to}：{c.events.map((e) => e.group ?? e.name).join('、')}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

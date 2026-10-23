@@ -8,6 +8,7 @@
 // 本模拟器对事件"文字条件"的真实判定（按事件名约定，改名字前先改这里）：
 //   「拿球」：与球距离 ≤ 2 格              「冲击」：与持球的对家距离 ≤ 攻击距离参数
 //   「距离小」：与球门距离 ≤ 射门距离参数    「距离大」：与球门距离 > 射门距离参数
+//   「回血」：血量未满才触发                「缓过来」：进入受控满「受控持续参数」拍
 //   血量维度的状态变化按真实血量数值判定（转到「血量<50」需血量数值 < 50，转到「血量≥50」需 ≥ 50）
 //
 // 位置类事件（带「位移」数值效果的）按坐标执行：
@@ -21,6 +22,7 @@
 // 每 tick：1. 上一拍监听反应先结算 2. 主动阶段（人机按打分选事件）3. 持续检测
 //   每实体每维度每拍最多改一次；同维度多条命中随机挑一条；
 //   蓄力锁 = 带「蓄能」数值的事件锁定该维度约 数值/40 拍，期间主动/检测事件不可取消（监听类如「打断」可破）；
+//   受控是限时状态：进入「受控」时记下拍号，满「受控持续参数」拍后被动事件「缓过来」自动恢复自由；
 //   前提涉及其他实体状态的抢占类主动事件每拍同名限一次（拿球/冲击）；冷却按事件记录
 import type { EntityKind, QiyuEvent, Scenario2 } from '@/types/model2';
 import { ZONE_X, ZONE_Y, zoneName } from '@/lib/defaultScenario2';
@@ -35,6 +37,7 @@ export interface SimEntity {
   hp: number;
   charge: number;
   chargeLock?: { dim: string; until: number } | null; // 蓄力中：锁定该维度直到指定拍
+  controlledSince?: number | null; // 进入「受控」状态的拍号（受控是限时状态，到期自动恢复）；null = 不在受控中
   cx: number; // 格子坐标（0..8）
   cy: number;
   homeY?: number; // 开局站位行（人机跑位的"车道"，避免全员挤一路）
@@ -94,12 +97,12 @@ export function initSim2(sc: Scenario2): SimState {
     count[p.team]++;
     entities.push({
       id: p.id, name: p.name, kind: 'player', team: p.team, professionId: p.professionId,
-      states: startOf('player'), hp: sc.balance.hpMax, charge: 0, chargeLock: null,
+      states: startOf('player'), hp: sc.balance.hpMax, charge: 0, chargeLock: null, controlledSince: null,
       cx: form[0], cy: form[1], homeY: form[1],
     });
   }
-  entities.push({ id: 'ball', name: '球', kind: 'ball', states: startOf('ball'), hp: 0, charge: 0, chargeLock: null, cx: CENTER.x, cy: CENTER.y });
-  entities.push({ id: 'goal', name: '球门', kind: 'goal', states: startOf('goal'), hp: 0, charge: 0, chargeLock: null, cx: 8, cy: 4 });
+  entities.push({ id: 'ball', name: '球', kind: 'ball', states: startOf('ball'), hp: 0, charge: 0, chargeLock: null, controlledSince: null, cx: CENTER.x, cy: CENTER.y });
+  entities.push({ id: 'goal', name: '球门', kind: 'goal', states: startOf('goal'), hp: 0, charge: 0, chargeLock: null, controlledSince: null, cx: 8, cy: 4 });
   return { tick: 0, entities, pending: [], cooldowns: {}, log: [], over: false, ballTargetId: null };
 }
 
@@ -146,6 +149,15 @@ function simGate(sc: Scenario2, st: SimState, ev: QiyuEvent, ent: SimEntity): bo
     case '滚向中心':
       // 球已经在中心就不再空滚（避免日志每拍刷屏）
       return ent.cx !== CENTER.x || ent.cy !== CENTER.y;
+    case '回血':
+      // 血满了就不再触发（避免日志每拍空刷"回血 10（现 100）"）
+      return ent.hp < sc.balance.hpMax;
+    case '缓过来': {
+      // 受控是限时状态：进入受控满「受控持续参数」拍后才允许恢复自由。
+      // 没记录进入拍号（比如手动摆的局面）就从当前拍开始计时。
+      if (ent.controlledSince == null) { ent.controlledSince = st.tick; return false; }
+      return st.tick - ent.controlledSince >= sc.balance.controlTicks;
+    }
     case '追踪队友': {
       // 追踪目标已贴身就不再空走（等「拿球」接管）
       const t = st.entities.find((e) => e.id === st.ballTargetId);
@@ -240,6 +252,12 @@ function applyEvent(sc: Scenario2, st: SimState, ev: QiyuEvent, ent: SimEntity, 
     ent.states[f.dimension] = f.to;
     changed.add(`${ent.id}:${f.dimension}`);
     stateBits.push(`${sc.dimensions.find((d) => d.id === f.dimension)?.name ?? ''} ${f.from}→${f.to}`);
+    // 受控是限时状态：进入时记下拍号（开始倒计时），离开时清除
+    const dimName = sc.dimensions.find((d) => d.id === f.dimension)?.name;
+    if (dimName === '姿态') {
+      if (f.to === '受控') ent.controlledSince = st.tick;
+      if (f.from === '受控') ent.controlledSince = null;
+    }
   }
 
   // 数值效果 + 坐标移动
@@ -364,7 +382,10 @@ export function stepSim2(sc: Scenario2, prev: SimState): SimState {
   const canFire = (ev: QiyuEvent, ent: SimEntity, phase: 'active' | 'listen' | 'detect') =>
     offCd(ev, ent) &&
     !lockBlocks(ev, ent, phase) &&
-    (moveLike(ev) || ev.effects.some((f) => ent.states[f.dimension] === f.from && !changed.has(`${ent.id}:${f.dimension}`) && hpGateOk(sc, ent, f))) &&
+    (moveLike(ev) ||
+      ev.effects.some((f) => ent.states[f.dimension] === f.from && !changed.has(`${ent.id}:${f.dimension}`) && hpGateOk(sc, ent, f)) ||
+      // 纯数值事件（没有状态变化，只有数值效果，如「回血」）：没有可命中的变化也算"有事可做"
+      (ev.effects.length === 0 && ev.numeric.length > 0)) &&
     preStatesOk(sc, ev, ent, st.entities) &&
     simGate(sc, st, ev, ent);
 

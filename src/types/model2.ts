@@ -118,6 +118,7 @@ export interface BalanceParams {
   displacement: number;     // 位移基准距离（米）
   attackRange: number;      // 攻击距离（格）：冲击类技能能打到多远的目标
   shootRange: number;       // 射门距离（格）：离球门多近才能激活射门
+  controlTicks: number;     // 受控持续（拍）：受控是限时状态，进入受控后多少拍自动恢复自由
 }
 
 export const SCENARIO_VERSION = 15;

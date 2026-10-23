@@ -2,7 +2,7 @@
 //   buildDimensionGraph = 单维度逻辑图：只看落在该维度上的状态变化
 //   buildTotalGraph     = 总超图：全部维度合并，同名状态粘合成一个节点
 // 另含整个方案的体检（collectIssues）：画不出图的纯数值事件、监听不存在、状态未声明等
-import type { EntityKind, QiyuEvent, Scenario2 } from '@/types/model2';
+import type { EntityKind, QiyuEvent, Scenario2, TriggerKind } from '@/types/model2';
 import { ENTITY_NAMES } from '@/types/model2';
 
 export interface GraphNode {
@@ -89,7 +89,113 @@ export function collectIssues(sc: Scenario2): { warnings: string[]; pureNumeric:
     else if (!d.states.includes(state)) warnings.push(`维度「${d.name}」的起始状态「${state}」不在它的状态列表里`);
   }
   const pureNumeric = sc.events.filter((e) => e.effects.length === 0);
+
+  // ---------- 死胡同与孤岛（按总超图的粘合关系判断） ----------
+  // 粘合邻接表：同名状态跨维度算同一个节点
+  const outNames = new Map<string, Set<string>>();
+  const addOut = (a: string, b: string) => {
+    const s = outNames.get(a) ?? new Set<string>();
+    s.add(b);
+    outNames.set(a, s);
+  };
+  for (const ev of sc.events) for (const f of ev.effects) addOut(f.from, f.to);
+  const declaredStates = new Set<string>();
+  for (const d of sc.dimensions) for (const s of d.states) declaredStates.add(s);
+
+  // 死胡同：声明过、但没有任何一条事件能从它出去（终局状态如「结算」是故意的，提示里注明可忽略）
+  const stateDim = new Map<string, string>(); // 状态名 -> 维度名（用于提示）
+  for (const d of sc.dimensions) for (const s of d.states) if (!stateDim.has(s)) stateDim.set(s, d.name);
+  for (const s of declaredStates) {
+    if (!outNames.has(s)) {
+      warnings.push(`状态「${s}」（维度「${stateDim.get(s)}」）没有任何事件能从它离开——死胡同；如果它是故意设计的终局状态（如「结算」）可忽略`);
+    }
+  }
+  // 孤岛：从任一起始状态出发永远到不了的声明状态（写了等于白写）
+  const reached = new Set<string>(Object.values(sc.startState));
+  const queue = [...reached];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    for (const nx of outNames.get(cur) ?? []) {
+      if (!reached.has(nx)) { reached.add(nx); queue.push(nx); }
+    }
+  }
+  for (const s of declaredStates) {
+    if (!reached.has(s)) {
+      warnings.push(`状态「${s}」（维度「${stateDim.get(s)}」）从起始状态出发永远到不了——孤岛状态，检查有没有事件漏写`);
+    }
+  }
   return { warnings: [...new Set(warnings)], pureNumeric };
+}
+
+// ---------- 矛盾分栏（优先级页展示用，不影响打分） ----------
+// 判定规则：两条事件在同一个维度、从同一个状态出发、去向不同 = 两两矛盾（系统在岔路口只能二选一）；
+//           去向相同 = 不矛盾，是共存（多条事件做同一个变化，用共存卡牌框在一起）。
+// 一个「矛盾栏」= 一个岔路口（维度 + 源状态），栏里按去向分支，分支间两两矛盾，分支内共存。
+export interface ConflictEventRef {
+  id: string;
+  name: string;
+  trigger: TriggerKind;
+  group?: string; // 复合组名（展示用）
+}
+export interface ConflictBranch {
+  to: string;
+  events: ConflictEventRef[]; // 同一去向的多条事件 = 共存卡牌
+}
+export interface ConflictGroup {
+  dimId: string;
+  dimName: string;
+  from: string;
+  branches: ConflictBranch[];
+  risk: '被动撞车' | '混合' | '玩家分支'; // 被动撞车 = 至少两个分支含被动事件（同时满足前提时系统随机挑，最需要检查）
+}
+export interface CoexistPoint {
+  dimId: string;
+  dimName: string;
+  from: string;
+  to: string;
+  events: ConflictEventRef[];
+}
+
+function collectBranches(sc: Scenario2): Map<string, Map<string, ConflictEventRef[]>> {
+  const byFrom = new Map<string, Map<string, ConflictEventRef[]>>();
+  for (const ev of sc.events) {
+    for (const f of ev.effects) {
+      const k = `${f.dimension}|${f.from}`;
+      let m = byFrom.get(k);
+      if (!m) { m = new Map(); byFrom.set(k, m); }
+      const arr = m.get(f.to) ?? [];
+      arr.push({ id: ev.id, name: ev.name, trigger: ev.trigger, group: ev.group });
+      m.set(f.to, arr);
+    }
+  }
+  return byFrom;
+}
+
+export function collectConflicts(sc: Scenario2): ConflictGroup[] {
+  const out: ConflictGroup[] = [];
+  for (const [k, m] of collectBranches(sc)) {
+    if (m.size < 2) continue; // 只有一个去向 = 不矛盾
+    const [dimId, from] = k.split('|');
+    const branches: ConflictBranch[] = [...m.entries()].map(([to, events]) => ({ to, events }));
+    const passiveBranches = branches.filter((b) => b.events.some((e) => e.trigger === '被动')).length;
+    const risk: ConflictGroup['risk'] = passiveBranches >= 2 ? '被动撞车' : passiveBranches === 1 ? '混合' : '玩家分支';
+    out.push({ dimId, dimName: dimNameOf(sc, dimId), from, branches, risk });
+  }
+  const rank = { 被动撞车: 0, 混合: 1, 玩家分支: 2 };
+  return out.sort((a, b) => rank[a.risk] - rank[b.risk] || a.dimName.localeCompare(b.dimName, 'zh') || a.from.localeCompare(b.from, 'zh'));
+}
+
+// 纯共存点：只有一个去向、但有多条事件做同一个变化（不矛盾，可以考虑合并或保持冗余）
+export function collectCoexist(sc: Scenario2): CoexistPoint[] {
+  const out: CoexistPoint[] = [];
+  for (const [k, m] of collectBranches(sc)) {
+    if (m.size !== 1) continue;
+    const [to, events] = [...m.entries()][0];
+    if (events.length < 2) continue;
+    const [dimId, from] = k.split('|');
+    out.push({ dimId, dimName: dimNameOf(sc, dimId), from, to, events });
+  }
+  return out.sort((a, b) => a.dimName.localeCompare(b.dimName, 'zh') || a.from.localeCompare(b.from, 'zh'));
 }
 
 function makeNode(name: string): GraphNode {

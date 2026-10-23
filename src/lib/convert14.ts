@@ -153,7 +153,7 @@ export function convertOldScenario(old: Scenario): { sc2: Scenario2; report: str
     dimensions,
     events,
     startState,
-    balance: { attackRange: 2, shootRange: 3, ...old.balance },
+    balance: { attackRange: 2, shootRange: 3, controlTicks: 5, ...old.balance },
     createdAt: now,
     updatedAt: now,
   };

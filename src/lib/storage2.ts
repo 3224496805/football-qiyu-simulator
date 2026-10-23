@@ -56,10 +56,11 @@ export function loadScenario(id: string): Scenario2 | null {
         `建议点顶部「新建」生成最新示例，或告诉我帮你一键重置。`,
       ];
     }
-    // 平衡参数新增字段（攻击距离/射门距离）对旧存档补默认值
+    // 平衡参数新增字段（攻击距离/射门距离/受控持续）对旧存档补默认值
     if (sc.balance) {
       sc.balance.attackRange = sc.balance.attackRange ?? 2;
       sc.balance.shootRange = sc.balance.shootRange ?? 3;
+      sc.balance.controlTicks = sc.balance.controlTicks ?? 5;
     }
     return sc;
   } catch {
@@ -79,6 +80,7 @@ function normalize(sc: Scenario2) {
     displacement: b?.displacement ?? 12,
     attackRange: b?.attackRange ?? 2,
     shootRange: b?.shootRange ?? 3,
+    controlTicks: b?.controlTicks ?? 5,
   };
   for (const ev of sc.events) {
     if (!ENTITY_KINDS.includes(ev.owner)) {
